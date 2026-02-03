@@ -57,3 +57,5 @@ Configuration files in `scripts/config/` allow you to customize:
 *   CMake arguments (e.g., Build type, Platforms).
 *   OPALX arguments.
 
+## Regression Tests
+The regression tests are located on the `cleanup` branch in the [regression-tests-x](https://github.com/OPALX-project/regression-tests-x/tree/cleanup) repository of the OPALX project.
