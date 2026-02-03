@@ -9,7 +9,10 @@ The core of this system is the `scripts/run_tests` bash script:
 2.  **Fetch**: Clones or updates the OPALX source code and regression tests repositories.
 3.  **Build**: Compiles OPALX.
 4.  **Test**: Runs regression tests.
-5.  **Report**: Optionally publishes HTML reports of the test results.
+5.  **Report**: Generates HTML reports organized by architecture:
+    - **Master landing page**: Single overview showing all architectures at `overview/<branch>/index.html`
+    - **Architecture-specific pages**: Detailed history per configuration
+    - **Test results**: Individual test outputs and comparisons
 
 ## Usage
 
@@ -45,10 +48,16 @@ The script creates a `workspace` directory (ignored by git) where all work happe
 ```
 workspace/
   <branch>/
-    src/          # OPALX source code
-    build/        # Build directory
-    tests/        # Regression tests
+    src/              # OPALX source code (shared across architectures)
+    tests/            # Regression tests (shared across architectures)
+    <architecture>/
+      build/          # Build directory (architecture-specific)
 ```
+
+This structure allows:
+- **Shared source code** across architectures (efficient, no duplication)
+- **Separate build directories** per architecture (isolated builds)
+- **Shared test repository** (tests are the same, only execution differs)
 
 ## Configuration
 
@@ -56,4 +65,22 @@ Configuration files in `scripts/config/` allow you to customize:
 *   Git branches for source and tests.
 *   CMake arguments (e.g., Build type, Platforms).
 *   OPALX arguments.
+*   **Architecture**: Define the build architecture (e.g., `cpu-serial`, `cpu-openmp`, `gpu-cuda-a100`). This organizes builds and test results by architecture, allowing multiple configurations to run independently.
+
+### Example Configuration
+
+```bash
+# scripts/config/debug-cpu.conf
+architecture="cpu-serial"
+branch="master"
+cmake_args+=("-DBUILD_TYPE=Debug")
+cmake_args+=("-DPLATFORMS=SERIAL")
+```
+
+The architecture setting affects:
+*   Build directory layout: `workspace/<branch>/<architecture>/build/`
+*   Published results structure: `<publish-dir>/<test-type>/<branch>/<architecture>/`
+*   HTML report titles to clearly identify which architecture was tested
+
+**Note**: Source code and tests are shared across architectures to avoid duplication, while build directories are architecture-specific to allow parallel builds.
 

@@ -1,0 +1,430 @@
+/* ============================================================================
+   Clean Stylesheet for OPALX Regression Test Reports
+   ============================================================================ */
+
+/* Reset & Base Styles */
+* {
+    box-sizing: border-box;
+}
+
+html {
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    padding: 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #333;
+    background-color: #f5f5f5;
+    max-width: none;
+}
+
+/* Content Container */
+#content {
+    max-width: 3600px;
+    margin: 0 auto;
+    background-color: #fff;
+    padding: 40px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border-radius: 8px;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+    font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-top: 1.5em;
+    margin-bottom: 0.75em;
+    color: #1a1a1a;
+}
+
+h1 {
+    font-size: 2.5rem;
+    margin-top: 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 3px solid #2c5aa0;
+}
+
+/* Style branch and architecture names in titles */
+h1 .branch-name,
+h1 .architecture-name,
+.title .branch-name,
+.title .architecture-name {
+    font-family: "Consolas", "Monaco", "Courier New", monospace;
+    font-size: 0.9em;
+    background-color: #f4f4f4;
+    padding: 2px 8px;
+    border-radius: 3px;
+    color: #c7254e;
+    font-weight: 600;
+    border: 1px solid #ddd;
+}
+
+h2 {
+    font-size: 2rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 2px solid #ddd;
+}
+
+h3 {
+    font-size: 1.5rem;
+    color: #2c5aa0;
+}
+
+h4 {
+    font-size: 1.25rem;
+    color: #555;
+}
+
+h5 {
+    font-size: 1.1rem;
+    color: #666;
+}
+
+h6 {
+    font-size: 1rem;
+    color: #777;
+}
+
+.title {
+    text-align: left;
+    margin-bottom: 0.5em;
+}
+
+.subtitle {
+    font-size: 1.2rem;
+    color: #666;
+    font-weight: 400;
+    margin-top: -0.5em;
+    margin-bottom: 2em;
+}
+
+p {
+    margin: 1em 0;
+    max-width: 1200px;
+}
+
+a {
+    color: #2c5aa0;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+a:hover {
+    color: #1a3a6b;
+    text-decoration: underline;
+}
+
+a:visited {
+    color: #5a3aa0;
+}
+
+/* Lists */
+ul, ol {
+    margin: 1em 0;
+    padding-left: 2em;
+    max-width: 1200px;
+}
+
+li {
+    margin: 0.5em 0;
+}
+
+ul ul, ul ol, ol ul, ol ol {
+    margin: 0.25em 0;
+}
+
+/* Tables */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 2em 0;
+    font-size: 0.95rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+thead {
+    background-color: #2c5aa0;
+    color: #fff;
+    font-weight: 600;
+}
+
+thead th {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 2px solid #1a3a6b;
+}
+
+tbody tr {
+    border-bottom: 1px solid #ddd;
+    transition: background-color 0.2s;
+}
+
+tbody tr:hover {
+    background-color: #f8f9fa;
+}
+
+tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+tbody tr:nth-child(even):hover {
+    background-color: #f0f0f0;
+}
+
+td, th {
+    padding: 10px 15px;
+    text-align: left;
+    vertical-align: top;
+}
+
+/* Code Blocks */
+code {
+    font-family: "Consolas", "Monaco", "Courier New", monospace;
+    font-size: 0.9em;
+    background-color: #f4f4f4;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: #c7254e;
+}
+
+pre {
+    font-family: "Consolas", "Monaco", "Courier New", monospace;
+    font-size: 0.9em;
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    border-left: 4px solid #2c5aa0;
+    padding: 15px;
+    overflow-x: auto;
+    border-radius: 4px;
+    line-height: 1.5;
+    margin: 1.5em 0;
+}
+
+pre code {
+    background-color: transparent;
+    padding: 0;
+    color: inherit;
+    border-radius: 0;
+}
+
+/* Blockquotes */
+blockquote {
+    margin: 1.5em 0;
+    padding: 1em 1.5em;
+    border-left: 4px solid #2c5aa0;
+    background-color: #f8f9fa;
+    color: #555;
+    font-style: italic;
+}
+
+blockquote p:first-child {
+    margin-top: 0;
+}
+
+blockquote p:last-child {
+    margin-bottom: 0;
+}
+
+/* Horizontal Rules */
+hr {
+    border: none;
+    border-top: 2px solid #ddd;
+    margin: 2em 0;
+}
+
+/* Images & Figures */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 1em 0;
+}
+
+figure {
+    margin: 2em 0;
+    text-align: center;
+}
+
+figcaption {
+    font-size: 0.9em;
+    color: #666;
+    margin-top: 0.5em;
+    font-style: italic;
+}
+
+/* Table of Contents */
+#table-of-contents {
+    background-color: #f8f9fa;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 20px;
+    margin: 2em 0;
+    max-width: 600px;
+}
+
+#table-of-contents h2 {
+    margin-top: 0;
+    font-size: 1.5rem;
+    border-bottom: 2px solid #2c5aa0;
+    padding-bottom: 0.5rem;
+}
+
+#table-of-contents ul {
+    list-style-type: none;
+    padding-left: 0;
+}
+
+#table-of-contents ul ul {
+    padding-left: 1.5em;
+}
+
+#table-of-contents li {
+    margin: 0.5em 0;
+}
+
+#table-of-contents a {
+    color: #2c5aa0;
+    text-decoration: none;
+    display: block;
+    padding: 0.25em 0;
+}
+
+#table-of-contents a:hover {
+    color: #1a3a6b;
+    text-decoration: underline;
+}
+
+/* Metadata */
+.author, .date, .creator, .validation {
+    font-size: 0.9em;
+    color: #777;
+    margin: 0.5em 0;
+}
+
+#postamble {
+    margin-top: 3em;
+    padding-top: 1.5em;
+    border-top: 1px solid #ddd;
+    font-size: 0.85em;
+    color: #999;
+}
+
+/* Status Indicators */
+.ok, .passed, .success {
+    color: #28a745;
+    font-weight: 600;
+}
+
+.failed, .error, .fail {
+    color: #dc3545;
+    font-weight: 600;
+}
+
+.broken, .warning {
+    color: #ffc107;
+    font-weight: 600;
+}
+
+.disabled, .skipped {
+    color: #6c757d;
+    font-weight: 400;
+}
+
+/* Org-mode Elements */
+.todo {
+    color: #dc3545;
+    font-weight: 700;
+}
+
+.done {
+    color: #28a745;
+    font-weight: 700;
+}
+
+.tag {
+    background-color: #e9ecef;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.85em;
+    margin-left: 0.5em;
+}
+
+.timestamp {
+    color: #6c757d;
+    font-size: 0.9em;
+}
+
+/* Footnotes */
+.footnotes {
+    margin-top: 3em;
+    padding-top: 1.5em;
+    border-top: 1px solid #ddd;
+    font-size: 0.9em;
+}
+
+/* Utility Classes */
+.center {
+    text-align: center;
+}
+
+.right {
+    text-align: right;
+}
+
+/* Responsive Design */
+@media (max-width: 1200px) {
+    #content {
+        max-width: 100%;
+        padding: 30px;
+    }
+}
+
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+    
+    #content {
+        padding: 20px;
+    }
+    
+    h1 {
+        font-size: 2rem;
+    }
+    
+    h2 {
+        font-size: 1.75rem;
+    }
+    
+    table {
+        font-size: 0.85rem;
+    }
+    
+    td, th {
+        padding: 8px 10px;
+    }
+}
+
+/* Print Styles */
+@media print {
+    body {
+        background-color: #fff;
+        color: #000;
+    }
+    
+    #content {
+        box-shadow: none;
+        max-width: 100%;
+    }
+    
+    a {
+        color: #000;
+        text-decoration: underline;
+    }
+}

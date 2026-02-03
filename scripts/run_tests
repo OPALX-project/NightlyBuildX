@@ -12,6 +12,7 @@ declare -ri	EC_GIT_ERROR=10
 
 declare branch="master"
 declare regtests_branch="master"
+declare architecture="cpu-serial"
 
 # indexed arrays
 declare -a cmake_args=()
@@ -86,6 +87,9 @@ OPTIONS:
 
 --config=FILE
 	The options above can be defined in the configuration FILE.
+	Configuration files can also set the 'architecture' variable
+	(e.g., cpu-serial, cpu-openmp, gpu-cuda-a100) to organize
+	builds and results by architecture.
 	
 --compile
 	Compile OPAL even nothing changed and a binary exists.
@@ -194,13 +198,13 @@ mkdir -p "${publish_dir}"
 #-------------------------------------------------------------------------------
 # Directory layout
 #
-# ${PREFIX}/scripts					                    ${bindir}
-# ${PREFIX}/workspace					                ${workspace}
-# ${PREFIX}/workspace/${branch}				            ${branchdir}
-# ${PREFIX}/workspace/${branch}/src			            ${srcdir}
-# ${PREFIX}/workspace/${branch}/build			        ${builddir}
-# ${PREFIX}/workspace/${branch}/tests			        ${testsbase}
-# ${PREFIX}/workspace/${branch}/tests/RegressionTests	${testsdir}
+# ${PREFIX}/scripts					                        ${bindir}
+# ${PREFIX}/workspace					                    ${workspace}
+# ${PREFIX}/workspace/${branch}				                ${branchdir}
+# ${PREFIX}/workspace/${branch}/src			                ${srcdir}
+# ${PREFIX}/workspace/${branch}/${architecture}/build		${builddir}
+# ${PREFIX}/workspace/${branch}/tests			            ${testsbase}
+# ${PREFIX}/workspace/${branch}/tests/RegressionTests	    ${testsdir}
 
 # Get absolute path to this script, portable handling for macOS/Linux
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -214,7 +218,7 @@ declare -r prefix="${bindir%/*}"
 declare -r workspace="${prefix}/workspace"
 declare -r branchdir="${workspace}/${branch}"
 declare -r srcdir="${branchdir}/src"
-declare    builddir="${branchdir}/build"
+declare    builddir="${branchdir}/${architecture}/build"
 declare -r testsbase="${branchdir}/tests"
 declare -r testsdir="${testsbase}/RegressionTests"
 
@@ -302,7 +306,7 @@ run_regressiontests() {
 
     # Create publishing directory
     if [[ -n "${publish_dir}" ]]; then
-        local -r publish_regtests_dir="${publish_dir}/regressionTests/${branch}"
+        local -r publish_regtests_dir="${publish_dir}/regressionTests/${branch}/${architecture}"
         mkdir -p "${publish_regtests_dir}"
         opts+=("--publish-dir=${publish_regtests_dir}")
     fi
@@ -350,28 +354,48 @@ run_regressiontests() {
 
 update_overview() {
     # nothing to do if ...
-    [[ -n ${publish_dir} ]] || return ${ec}
-    [[ "${result_compile}${result_u_total}${result_r_total}" == '---' ]] && return ${ec}
+    [[ -n ${publish_dir} ]] || return 0
+    [[ "${result_compile}${result_u_total}${result_r_total}" == '---' ]] && return 0
 
-    mkdir -p "${publish_dir}/${branch}"
+    # Create overview directory - separate from test results
+    local -r overview_dir="${publish_dir}/overview/${branch}/${architecture}"
+    mkdir -p "${overview_dir}"
 
     # org file with the table we have to update
-    local -r index_org="${publish_dir}/${branch}/index.org"
+    local -r index_org="${overview_dir}/index.org"
 
-    # copy template to target directory if not exist
-    if [[ ! -e "${index_org}" ]]; then
-        sed "s/@BRANCH@/${branch}/" \
-            "${bindir}/html/index.org" > "${index_org}"
+    # Always regenerate header from template to ensure placeholders are current
+    # First, extract existing table data if the file exists
+    local -r tmpfile=$(mktemp "/tmp/index_table.XXXXXX")
+    if [[ -e "${index_org}" ]]; then
+        # Extract only the table lines (starting from the date header)
+        awk '/\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found {print}' "${index_org}" > "${tmpfile}"
+    else
+        # New file - create empty table
+        echo '|       Date | build | unit-tests   | regression-tests   |' > "${tmpfile}"
+        echo '|------------+-------+--------------+--------------------|' >> "${tmpfile}"
+        echo '|            |       |              |                    |' >> "${tmpfile}"
     fi
 
+    # Regenerate the full file from template with substitutions
+    sed -e "s/@BRANCH@/${branch}/g" \
+        -e "s/@ARCHITECTURE@/${architecture}/g" \
+        "${bindir}/html/index.org" > "${index_org}"
+    
+    # Remove the template's empty table and append the actual table data
+    sed -i '' '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+    cat "${tmpfile}" >> "${index_org}"
+    rm -f "${tmpfile}"
+
     # links to generated XML pages used in the table
-    local -r u_results_html="../unitTests/${branch}/results_${timestamp}.html"
-    local -r r_results_html="../regressionTests/${branch}/results_${timestamp}.html"
+    # Adjusted relative paths from overview directory
+    local -r u_results_html="../../../unitTests/${branch}/${architecture}/results_${timestamp}.html"
+    local -r r_results_html="../../../regressionTests/${branch}/${architecture}/results_${timestamp}.html"
 
     local time_col
-    local ofile="${publish_dir}/${branch}/output/${timestamp}.txt"
+    local ofile="${publish_dir}/output/${branch}/${architecture}/${timestamp}.txt"
     if [[ -e "${ofile}" ]]; then
-        time_col="[[./output/${timestamp}.txt][${today} ${time/-/:}]]"
+        time_col="[[../../../output/${branch}/${architecture}/${timestamp}.txt][${today} ${time/-/:}]]"
     else
         time_col="${today} ${time/-/:}"
     fi
@@ -405,7 +429,7 @@ update_overview() {
     line+="| ${u_report} "
     line+="| ${r_report} "
     line+="|"
-    local -r tmpfile=$(mktemp "/tmp/awk.XXXXXX")
+    local -r tmpfile2=$(mktemp "/tmp/awk.XXXXXX")
     awk "{print}; /^\|-/ {print \"${line}\"}" \
         "${index_org}" > "${tmpfile}"
     mv "${tmpfile}" "${index_org}"
@@ -419,17 +443,77 @@ update_overview() {
 
     # Define the styles to embed
     local -r style_content="<style>
-  $(cat ${prefix}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
-  $(cat ${prefix}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
+  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
+  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
 </style>
 <script type=\"text/javascript\">
-  $(cat ${prefix}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js 2>/dev/null || echo '')
+  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js 2>/dev/null || echo '')
 </script>"
 
     pandoc -f org -t html \
         --metadata title="OPALX" \
         --include-in-header=<(echo "${style_content}") \
         -s -o "${index_org%.*}.html" "${index_org}"
+    
+    # Update master landing page with all architectures
+    update_master_landing_page
+}
+
+update_master_landing_page() {
+    # Master landing page location
+    local -r master_dir="${publish_dir}/overview/${branch}"
+    local -r master_org="${master_dir}/index.org"
+    local -r master_html="${master_dir}/index.html"
+    
+    mkdir -p "${master_dir}"
+    
+    # Find all architecture directories under this branch
+    local -a architectures=()
+    if [[ -d "${publish_dir}/overview/${branch}" ]]; then
+        while IFS= read -r arch_dir; do
+            local arch_name=$(basename "${arch_dir}")
+            # Skip files, only process directories
+            [[ -d "${arch_dir}" ]] && [[ -f "${arch_dir}/index.html" ]] && architectures+=("${arch_name}")
+        done < <(find "${publish_dir}/overview/${branch}" -maxdepth 1 -type d ! -path "${publish_dir}/overview/${branch}")
+    fi
+    
+    # Build the master page from template
+    local -r tmpfile=$(mktemp "/tmp/master-landing.XXXXXX")
+    
+    # Copy template and substitute @BRANCH@, stop at placeholder
+    sed "s/@BRANCH@/${branch}/g" "${bindir}/html/master-index.org" | \
+        awk '/ARCHITECTURE_LINKS will be inserted here/ {exit} {print}' > "${tmpfile}"
+    
+    # Add links for each architecture
+    if (( ${#architectures[@]} > 0 )); then
+        for arch in "${architectures[@]}"; do
+            echo "" >> "${tmpfile}"
+            echo "- [[./${arch}/index.html][${arch} Details]]" >> "${tmpfile}"
+        done
+    else
+        echo "" >> "${tmpfile}"
+        echo "No architectures available yet. Run tests to populate this page." >> "${tmpfile}"
+    fi
+    
+    # Write the updated master page
+    mv "${tmpfile}" "${master_org}"
+    
+    # Remove #+SETUPFILE if present to avoid file read errors on local builds
+    sed -i '' '/^#+SETUPFILE/d' "${master_org}"
+    
+    # Convert to HTML
+    local -r style_content="<style>
+  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
+  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
+</style>
+<script type=\"text/javascript\">
+  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js 2>/dev/null || echo '')
+</script>"
+    
+    pandoc -f org -t html \
+        --metadata title="OPALX Regression Tests" \
+        --include-in-header=<(echo "${style_content}") \
+        -s -o "${master_html}" "${master_org}"
 }
 
 main() {

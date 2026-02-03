@@ -1,9 +1,9 @@
-#+TITLE: OPALX Regression Tests
+#+TITLE: OPALX Regression Tests - Branch '@BRANCH@'
 #+AUTHOR: AMAS - PSI
-#+HTML_HEAD: <style> #content{max-width:3600px;}</style>
+#+HTML_HEAD: <style> #content{max-width:2400px;}</style>
 #+HTML_HEAD: <style> p{max-width:1200px;}</style>
 #+HTML_HEAD: <style> li{max-width:1200px;}</style>
-#+HTML_HEAD: <style> .document-title { display: none; }</style>
+#+HTML_HEAD: <style> h2{margin-top:2em; border-bottom: 2px solid #ddd; padding-bottom: 0.5em;}</style>
 #
 
 @@html:
@@ -15,10 +15,10 @@ table colgroup col:nth-child(2) {
     width: 5%;
 }
 table colgroup col:nth-child(3) {
-    width: 40%;
+    width: 39%;
 }
 table colgroup col:nth-child(4) {
-    width: 40%;
+    width: 39%;
 }
 .branch-name, .architecture-name {
     font-family: "Consolas", "Monaco", "Courier New", monospace;
@@ -38,9 +38,10 @@ table colgroup col:nth-child(4) {
 </style>
 @@
 
-@@html:<h1 style="font-size: 2.5rem; margin-top: 0; padding-bottom: 0.5rem; border-bottom: 3px solid #2c5aa0;">Regression Tests - Branch <span class="branch-name">@BRANCH@</span> - Architecture <span class="architecture-name">@ARCHITECTURE@</span></h1>@@
+* Overview - All Architectures
 
-|       Date | build | unit-tests   | regression-tests   |
-|------------+-------+--------------+--------------------|
-|            |       |              |                    |
+@@html:<p>This page provides an overview of regression test results across all architectures for branch <span class="branch-name">@BRANCH@</span>.</p>@@
 
+** Architecture Quick Links
+
+<!-- ARCHITECTURE_LINKS will be inserted here by update_master_landing_page -->
