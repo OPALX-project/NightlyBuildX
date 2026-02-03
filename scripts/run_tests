@@ -1,0 +1,468 @@
+#!/usr/bin/env bash
+
+#
+# Compile OPALX and run unit- and regression tests.
+#
+
+# exit on error
+set -o errexit
+
+declare -ri	EC_ARG_ERROR=1
+declare -ri	EC_GIT_ERROR=10
+
+declare branch="master"
+declare regtests_branch="master"
+
+# indexed arrays
+declare -a cmake_args=()
+declare -a opalx_args=()
+declare -a unittests_args=()
+
+declare -r today=$(date +%Y-%m-%d)
+declare -r time=$(date +%H-%M)
+declare -r timestamp="${today}_${time}"
+
+#------------------------------------------------------------------------------- 
+# error handling
+#
+declare aborting='yes'
+
+# SITINT or SIGTERM event calls _signal_handler
+# exits the script with the errorcode 
+trap _signal_handler SIGINT SIGTERM
+_signal_handler() {
+	local ec=$?
+	echo "Aborting ..."
+	aborting='yes'
+	exit ${ec}
+}
+
+# EXIT event calls _exit
+# if in aborting state exit the script with the errorcode 
+trap _exit EXIT
+_exit() {
+        local -i ec=$?
+	if [[ ${aborting} == 'yes' ]]; then
+		return ${ec}
+	fi
+	update_overview
+}
+
+# if errorcode ($1) > 0, then redirect output to 
+# stderr and exit the script with the errorcode
+die() {
+	(( $1 > 0 )) && exec 1>&2
+	echo -e "$2\n"
+	exit $1
+}
+
+usage() {
+	echo "Usage:
+	$(basename "$0") [OPTIONS...] 
+
+Compile OPALX, run regression-tests. 
+On the first time this script is called, the following steps will be
+performed:
+
+1. clone OPALX repository
+2. compile OPALX, stop on error
+3. clone regression-tests repository
+4. run regression-tests
+
+On further calls:
+
+1. update OPAL repository
+2. compile OPAL only if changed, stop on error
+3. update regression-tests repository
+4. run regression-tests only if OPAL has been compiled or the some 
+    regression-tests has been changed.
+
+
+OPTIONS:
+===========
+--publish-dir=DIR
+	Prefix of the publication directory. If not set
+	or empty, no HTML output will be created.
+
+--config=FILE
+	The options above can be defined in the configuration FILE.
+	
+--compile
+	Compile OPAL even nothing changed and a binary exists.
+
+--unit-tests
+	Run unit-tests even OPAL has not been compiled.
+
+--reg-tests
+	Run regression-tests even OPAL has not been compiled and the
+	tests has not been changed.
+
+-f | --force
+	Force compiling OPAL and run unit- and regression-tests.
+
+-h | -? | --help
+	This help.
+
+" 1>&2
+	exit 1
+}
+
+#-------------------------------------------------------------------------------
+# handle arguments
+#
+
+# default URL for OPALX source and regression-tests repository
+declare src_repo_url="https://github.com/OPALX-project/OPALX.git"
+declare	tests_repo_url="https://github.com/OPALX-project/regression-tests-x.git"
+
+# absolute or relative directory where to publish the results
+# of the regression und unit tests. If empty, nothing will be
+# published.
+declare -x	publish_dir=''
+
+# run unit- and/or regression tests
+declare	opt_force='no'
+declare	do_compile='no'
+declare do_unittests='no'
+declare do_regtests='no'
+
+# configuration file
+declare	opt_config_file="default-${branch}.conf"
+
+# tests to run, all if non passed as argument
+declare -a tests=()
+
+while (( $# > 0 )); do
+	case $1 in
+        --config|--config=* )
+            if [[ $1 == *=* ]]; then
+                opt_config_file="${1#*=}"
+            else
+                opt_config_file="$2"; shift 1
+            fi
+            if [[ ! -e "${opt_config_file}" ]]; then
+                die 1 "ERROR: configuration file does not exist - ${opt_config_file}"
+            fi
+            source "${opt_config_file}"
+            if (( $? != 0)); then
+                die 1 "ERROR: cannot source configuration file - ${opt_config_file} "
+            fi
+            ;;
+		--publish-dir|--publish-dir=* )
+             
+            if [[ $1 == *=* ]]; then
+                publish_dir="${1#*=}"
+            else
+                publish_dir="$2"; shift 1
+            fi
+            if [[ -n ${publish_dir} ]]; then
+                publish_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${publish_dir}")
+            fi
+            ;;
+		--compile )
+			do_compile='yes'
+			;;
+        --reg-tests )
+            do_regtests='yes'
+            ;;
+        --unit-tests )
+            do_unittests='yes'
+			;;
+		-f | --force )
+		    opt_force='yes'
+			do_compile='yes'
+            do_regtests='yes'
+            do_unittests='yes'
+		    ;;
+		-h | -\? | --help )
+			usage
+			;;
+		-* )
+            echo "Unknown option: $1" 1>&2
+            exit
+            ;;
+		* )
+            tests+=( "$1" )
+            ;;
+	esac
+	shift 1
+done
+
+mkdir -p "${publish_dir}"
+
+
+#-------------------------------------------------------------------------------
+# Directory layout
+#
+# ${PREFIX}/scripts					                    ${bindir}
+# ${PREFIX}/workspace					                ${workspace}
+# ${PREFIX}/workspace/${branch}				            ${branchdir}
+# ${PREFIX}/workspace/${branch}/src			            ${srcdir}
+# ${PREFIX}/workspace/${branch}/build			        ${builddir}
+# ${PREFIX}/workspace/${branch}/tests			        ${testsbase}
+# ${PREFIX}/workspace/${branch}/tests/RegressionTests	${testsdir}
+
+# Get absolute path to this script, portable handling for macOS/Linux
+if [[ "$(uname)" == "Darwin" ]]; then
+    declare -r abs_scriptname=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "$0")
+else
+    declare -r abs_scriptname=$(readlink -f "$0")
+fi
+
+declare -r bindir="${abs_scriptname%/*}"
+declare -r prefix="${bindir%/*}"
+declare -r workspace="${prefix}/workspace"
+declare -r branchdir="${workspace}/${branch}"
+declare -r srcdir="${branchdir}/src"
+declare    builddir="${branchdir}/build"
+declare -r testsbase="${branchdir}/tests"
+declare -r testsdir="${testsbase}/RegressionTests"
+
+# Result variables
+result_compile="-"
+
+# Unit tests
+result_u_total="-"
+result_u_passed="-"
+result_u_failed="-"
+result_u_disabled="-"
+result_u_broken="-"
+
+# Regression tests
+result_r_total="-"
+result_r_passed="-"
+result_r_failed="-"
+result_r_disabled="-"
+result_r_broken="-"
+
+clone_repo() {
+	local -r repo_url="$1"
+	local -r dir="$2"
+	{
+		git clone "${repo_url}" "${dir}" || exit ${EC_GIT_ERROR}
+		cd "${dir}"
+		git checkout "${branch}" || exit ${EC_GIT_ERROR}
+	}
+}
+
+update_repo() {
+        # Variables (read-only) to hold the arguments
+	local -r _dir="$1"
+	local -r _branch="$2"
+	local -r _url="$3"
+
+        # Checks if the arguements are non-zero, exit the script if they are
+	[[ -n "${_dir}" ]]    || die ${EC_ARG_ERROR} "Oops in $0: no repo dir passed!"
+	[[ -n "${_branch}" ]] || die ${EC_ARG_ERROR} "Oops in $0: no branch name passed!"
+	[[ -n "${_url}" ]]    || die ${EC_ARG_ERROR} "Oops in $0: no repo URL passed!"
+
+        # Checks if the the directory does not exist, clones
+	if [[ ! -d "${_dir}" ]]; then
+		git clone "${_url}" "${_dir}"
+		cd "${_dir}"
+		git checkout "${_branch}"
+        bash gen_OPALrevision
+		return 0
+        # Otherwise merge the changes 
+	else
+		cd "${_dir}"
+		git rev-parse --is-inside-work-tree 1>/dev/null 2>&1 || \
+			die ${EC_GIT_ERROR} "${_dir}: is not a Git working directory!"
+		git checkout "${_branch}"
+		git fetch
+
+		local -i num_changed_files=$(git diff --name-only  "origin/${_branch}"  | wc -l | awk '{print $1}')
+		if (( $num_changed_files == 0 )); then
+			echo "Working directory '${_dir}' is up to date!"
+			return 1
+		fi
+		git merge "origin/${_branch}"
+        bash gen_OPALrevision
+		return 0
+	fi
+}
+
+compile_opalx() {
+    result_compile='failed'
+	cd "${branchdir}"
+	rm -rf "${builddir}"
+	mkdir -p "${builddir}"
+	cd "${builddir}"
+	cmake "${cmake_args[@]}" "${srcdir}"
+	time make -j8
+    result_compile='ok'
+}
+
+run_regressiontests() {
+    # Python file to run tests
+    local -r run_tests="${bindir}/run-reg-tests.py"
+
+    # Array to hold arguments
+    local opts=()
+
+    # Create publishing directory
+    if [[ -n "${publish_dir}" ]]; then
+        local -r publish_regtests_dir="${publish_dir}/regressionTests/${branch}"
+        mkdir -p "${publish_regtests_dir}"
+        opts+=("--publish-dir=${publish_regtests_dir}")
+    fi
+
+    # Append the OPALX arguments to the array
+	if [[ -n "${opalx_args}" ]]; then
+		opts+=(${opalx_args[@]/#/--opalx-args=})
+	fi
+    opts+=("--opalx-exe-path=${builddir}/src")
+	opts+=("--base-dir=${testsdir}")
+    opts+=("--timestamp=${timestamp}")
+
+    # Run regression tests
+	python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+
+    # Ensure existance of publishing directory
+    local -i ec=$?
+    [[ -n ${publish_dir} ]] || return ${ec}
+
+    # compile the XML results file with the XSLT stylesheet
+    local -r results_xml="${publish_regtests_dir}/results_${timestamp}.xml"
+    local -r results_xslt="${publish_regtests_dir}/results.xslt"
+    if [[ -f "${results_xml}" && -f "${results_xslt}" ]]; then
+        xsltproc "${results_xslt}" "${results_xml}" > "${results_xml%.*}.html"
+    fi
+
+    # get results from HTML file created/updated by regression-tests 
+    local index_html="${publish_regtests_dir}/index.html"
+    read passed broken failed total < <(
+            awk "/${timestamp}/ {
+                    split(\$4, p, \":\");
+                    split(\$6, b, \":\");
+                    split(\$8, f, \":\");
+                    split(\$10, t,  \":\");
+                    printf \"%s %s %s %s\n\", p[2], b[2], f[2], t[2]; exit}" \
+                            < "${index_html}")
+    result_r_total=${total/\]}
+    result_r_passed=${passed}
+    result_r_failed=${failed}
+    result_r_disabled='-'
+    result_r_broken=${broken}
+
+    return ${ec}
+}
+
+update_overview() {
+    # nothing to do if ...
+    [[ -n ${publish_dir} ]] || return ${ec}
+    [[ "${result_compile}${result_u_total}${result_r_total}" == '---' ]] && return ${ec}
+
+    mkdir -p "${publish_dir}/${branch}"
+
+    # org file with the table we have to update
+    local -r index_org="${publish_dir}/${branch}/index.org"
+
+    # copy template to target directory if not exist
+    if [[ ! -e "${index_org}" ]]; then
+        sed "s/@BRANCH@/${branch}/" \
+            "${bindir}/html/index.org" > "${index_org}"
+    fi
+
+    # links to generated XML pages used in the table
+    local -r u_results_html="../unitTests/${branch}/results_${timestamp}.html"
+    local -r r_results_html="../regressionTests/${branch}/results_${timestamp}.html"
+
+    local time_col
+    local ofile="${publish_dir}/${branch}/output/${timestamp}.txt"
+    if [[ -e "${ofile}" ]]; then
+        time_col="[[./output/${timestamp}.txt][${today} ${time/-/:}]]"
+    else
+        time_col="${today} ${time/-/:}"
+    fi
+
+    # build string with result for unit-tests. This will be used as link-name.
+    if [[ "${result_u_total}" == "-" ]]; then
+        local -r u_report='-'
+    else
+        local -r u_t="total:${result_u_total}"
+        local -r u_p="passed:${result_u_passed}"
+        local -r u_f="failed:${result_u_failed}"
+        local -r u_d="disabled:${result_u_disabled}"
+        local -r u_b="broken:${result_u_broken}"
+        local -r u_report="[[${u_results_html}][${u_t}; ${u_p}; ${u_f}; ${u_d}; ${u_b}]]"
+    fi
+    # build string with result for regression-tests. This will be used as link-name.
+    if [[ "${result_r_total}" == "-" ]]; then
+        local -r r_report='-'
+    else
+        local -r r_t="total:${result_r_total}"
+        local -r r_p="passed:${result_r_passed}"
+        local -r r_f="failed:${result_r_failed}"
+        local -r r_d="disabled:${result_r_disabled}"
+        local -r r_b="broken:${result_r_broken}"
+        local -r r_report="[[${r_results_html}][${r_t}, ${r_p}, ${r_f}, ${r_d}, ${r_b}]]"
+    fi
+    # add new line to org table
+    line=""
+    line+="| ${time_col} "
+    line+="| ${result_compile} "
+    line+="| ${u_report} "
+    line+="| ${r_report} "
+    line+="|"
+    local -r tmpfile=$(mktemp "/tmp/awk.XXXXXX")
+    awk "{print}; /^\|-/ {print \"${line}\"}" \
+        "${index_org}" > "${tmpfile}"
+    mv "${tmpfile}" "${index_org}"
+
+    # Remove #+SETUPFILE if present to avoid file read errors on local builds
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' '/^#+SETUPFILE/d' "${index_org}"
+    else
+        sed -i '/^#+SETUPFILE/d' "${index_org}"
+    fi
+
+    # Define the styles to embed
+    local -r style_content="<style>
+  $(cat ${prefix}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
+  $(cat ${prefix}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
+</style>
+<script type=\"text/javascript\">
+  $(cat ${prefix}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js 2>/dev/null || echo '')
+</script>"
+
+    pandoc -f org -t html \
+        --metadata title="OPALX" \
+        --include-in-header=<(echo "${style_content}") \
+        -s -o "${index_org%.*}.html" "${index_org}"
+}
+
+main() {
+    # local variable for the opalx binary
+    local -r opalxbin="${builddir}/src/opalx"
+    
+    # Getting latest repo version
+    printf "\nUpdating OPALX source repository... \n"
+	update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+
+    # If the binary does not exist we need to compile
+    [[ -e ${opalxbin} ]] || do_compile='yes'
+	aborting='no'
+ 
+    # Compilation
+	if [[ "${do_compile}" == "yes" ]]; then
+        printf "\nStarting OPALX compilation \n"
+		compile_opalx
+		do_unittests='yes'
+		do_regtests='yes'
+	fi
+    
+    # Unit tests
+
+    # Regression test
+    printf "\nUpdating regression tests repository...\n"
+	update_repo "${testsbase}" "${regtests_branch}" "${tests_repo_url}" && do_regtests='yes'
+
+    if [[ ${do_regtests} == 'yes' ]]; then
+        printf "\nRunning regression tests for OPALX\n"
+        run_regressiontests || return 1
+    fi
+
+}
+
+main
