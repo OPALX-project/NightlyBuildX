@@ -503,7 +503,11 @@ update_master_landing_page() {
     mv "${tmpfile}" "${master_org}"
     
     # Remove #+SETUPFILE if present to avoid file read errors on local builds
-    sed -i '' '/^#+SETUPFILE/d' "${master_org}"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' '/^#+SETUPFILE/d' "${master_org}"
+    else
+        sed -i '/^#+SETUPFILE/d' "${master_org}"
+    fi
     
     # Convert to HTML
     local -r style_content="<style>
