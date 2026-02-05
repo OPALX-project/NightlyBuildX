@@ -383,7 +383,11 @@ update_overview() {
         "${bindir}/html/index.org" > "${index_org}"
     
     # Remove the template's empty table and append the actual table data
-    sed -i '' '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+    else
+        sed -i '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+    fi
     cat "${tmpfile}" >> "${index_org}"
     rm -f "${tmpfile}"
 

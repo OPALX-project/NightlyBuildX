@@ -53,6 +53,8 @@ class Reporter:
         root = xmlRep.firstChild
         xmlRep.insertBefore (pi, root)
         content = self.xml_report.toprettyxml(indent='  ').format(plots_dir)
+        # Remove invalid control characters (except whitespace) to prevent XML parsing errors
+        content = ''.join(c for c in content if ord(c) >= 32 or c in '\n\r\t')
         f = open (filename, "w")
         try:
             f.write (content)
