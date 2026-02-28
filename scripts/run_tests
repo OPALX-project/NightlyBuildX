@@ -320,7 +320,7 @@ run_regressiontests() {
     opts+=("--timestamp=${timestamp}")
 
     # Run regression tests
-	python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+	salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
 
     # Ensure existance of publishing directory
     local -i ec=$?
