@@ -1,4 +1,5 @@
 *.pyc
-results
-workspace
+results/
+workspace/
 .DS_Store
+scripts/__pycache__/
