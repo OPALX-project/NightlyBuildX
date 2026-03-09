@@ -66,6 +66,7 @@ Configuration files in `scripts/config/` allow you to customize:
 *   CMake arguments (e.g., Build type, Platforms).
 *   OPALX arguments.
 *   **Architecture**: Define the build architecture (e.g., `cpu-serial`, `cpu-openmp`, `gpu-cuda-a100`). This organizes builds and test results by architecture, allowing multiple configurations to run independently.
+*   **Unit tests**: Set `do_unittests='yes'` in the config to run unit tests (`ctest -L unit`) after each build when using that config; set to `'no'` to disable. The provided configs enable unit tests by default.
 
 ### Example Configuration
 

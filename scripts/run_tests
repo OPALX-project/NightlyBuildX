@@ -194,6 +194,14 @@ done
 
 mkdir -p "${publish_dir}"
 
+# Ensure unit tests are enabled for nightly builds unless explicitly set in config (match NightlyBuildX).
+case " ${cmake_args[*]} " in
+    *"OPALX_ENABLE_UNIT_TESTS"*)
+        ;;
+    *)
+        cmake_args+=("-DOPALX_ENABLE_UNIT_TESTS=ON")
+        ;;
+esac
 
 #-------------------------------------------------------------------------------
 # Directory layout
@@ -353,48 +361,45 @@ run_regressiontests() {
 }
 
 run_unittests() {
+    # Match NightlyBuildX: only run unit tests when publish directory is set.
+    [[ -n "${publish_dir}" ]] || return 0
+
     result_u_total='-'
     result_u_passed='-'
     result_u_failed='-'
     result_u_disabled='-'
     result_u_broken='-'
 
+    local -r unit_dir="${publish_dir}/unitTests/${branch}/${architecture}"
+    mkdir -p "${unit_dir}"
+    local -r results_txt="${unit_dir}/results_${timestamp}.txt"
+
     [[ -d "${builddir}" ]] || return 0
     [[ -f "${builddir}/CTestTestfile.cmake" ]] || return 0
 
     cd "${builddir}"
-    local ctest_out
-    ctest_out=$(ctest -L unit "${unittests_args[@]}" --output-on-failure 2>&1) || true
-    local -i ec=$?
-    echo "${ctest_out}"
+    # Run CTest (all tests, same as NightlyBuildX) and capture output; exit code from ctest.
+    ctest --output-on-failure "${unittests_args[@]}" | tee "${results_txt}"
+    local -i ec=${PIPESTATUS[0]}
 
-    # Parse "X% tests passed, Y tests failed out of Z" from ctest summary line
-    local passed=0 failed=0 notrun=0 total=0
-    while IFS= read -r line; do
-        if [[ "$line" =~ ([0-9]+)%\ tests\ passed,\ ([0-9]+)\ tests\ failed\ out\ of\ ([0-9]+) ]]; then
-            failed="${BASH_REMATCH[2]}"
-            total="${BASH_REMATCH[3]}"
-            passed=$((total - failed))
-            break
+    # Parse summary line, e.g. "100% tests passed, 0 tests failed out of 10"
+    if [[ -s "${results_txt}" ]]; then
+        local summary
+        summary=$(grep -E "tests failed out of" "${results_txt}" | tail -n 1 || true)
+        if [[ -n "${summary}" ]]; then
+            local failed total
+            if [[ "${summary}" =~ ([0-9]+)\ tests\ failed\ out\ of\ ([0-9]+) ]]; then
+                failed="${BASH_REMATCH[1]}"
+                total="${BASH_REMATCH[2]}"
+                result_u_total="${total}"
+                result_u_failed="${failed}"
+                if [[ -n "${total}" && -n "${failed}" ]]; then
+                    result_u_passed="$(( total - failed ))"
+                fi
+                result_u_disabled='-'
+                result_u_broken='-'
+            fi
         fi
-    done <<< "${ctest_out}"
-
-    result_u_total=${total}
-    result_u_passed=${passed}
-    result_u_failed=${failed}
-    result_u_disabled=${notrun}
-    result_u_broken='-'
-
-    if [[ -n "${publish_dir}" ]]; then
-        local -r publish_unittests_dir="${publish_dir}/unitTests/${branch}/${architecture}"
-        mkdir -p "${publish_unittests_dir}"
-        local -r results_html="${publish_unittests_dir}/results_${timestamp}.html"
-        {
-            echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Unit tests</title></head><body>'
-            echo "<h2>Unit tests ${timestamp}</h2><pre>"
-            echo "${ctest_out}" | sed 's/</\&lt;/g; s/>/\&gt;/g'
-            echo '</pre></body></html>'
-        } > "${results_html}"
     fi
 
     return ${ec}
@@ -441,7 +446,7 @@ update_overview() {
 
     # links to generated XML pages used in the table
     # Adjusted relative paths from overview directory
-    local -r u_results_html="../../../unitTests/${branch}/${architecture}/results_${timestamp}.html"
+    local -r u_results_html="../../../unitTests/${branch}/${architecture}/results_${timestamp}.txt"
     local -r r_results_html="../../../regressionTests/${branch}/${architecture}/results_${timestamp}.html"
 
     local time_col
