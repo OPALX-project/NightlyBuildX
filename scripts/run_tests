@@ -352,6 +352,54 @@ run_regressiontests() {
     return ${ec}
 }
 
+run_unittests() {
+    result_u_total='-'
+    result_u_passed='-'
+    result_u_failed='-'
+    result_u_disabled='-'
+    result_u_broken='-'
+
+    [[ -d "${builddir}" ]] || return 0
+    [[ -f "${builddir}/CTestTestfile.cmake" ]] || return 0
+
+    cd "${builddir}"
+    local ctest_out
+    ctest_out=$(ctest -L unit "${unittests_args[@]}" --output-on-failure 2>&1) || true
+    local -i ec=$?
+    echo "${ctest_out}"
+
+    # Parse "X% tests passed, Y tests failed out of Z" from ctest summary line
+    local passed=0 failed=0 notrun=0 total=0
+    while IFS= read -r line; do
+        if [[ "$line" =~ ([0-9]+)%\ tests\ passed,\ ([0-9]+)\ tests\ failed\ out\ of\ ([0-9]+) ]]; then
+            failed="${BASH_REMATCH[2]}"
+            total="${BASH_REMATCH[3]}"
+            passed=$((total - failed))
+            break
+        fi
+    done <<< "${ctest_out}"
+
+    result_u_total=${total}
+    result_u_passed=${passed}
+    result_u_failed=${failed}
+    result_u_disabled=${notrun}
+    result_u_broken='-'
+
+    if [[ -n "${publish_dir}" ]]; then
+        local -r publish_unittests_dir="${publish_dir}/unitTests/${branch}/${architecture}"
+        mkdir -p "${publish_unittests_dir}"
+        local -r results_html="${publish_unittests_dir}/results_${timestamp}.html"
+        {
+            echo '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Unit tests</title></head><body>'
+            echo "<h2>Unit tests ${timestamp}</h2><pre>"
+            echo "${ctest_out}" | sed 's/</\&lt;/g; s/>/\&gt;/g'
+            echo '</pre></body></html>'
+        } > "${results_html}"
+    fi
+
+    return ${ec}
+}
+
 update_overview() {
     # nothing to do if ...
     [[ -n ${publish_dir} ]] || return 0
@@ -545,6 +593,10 @@ main() {
 	fi
     
     # Unit tests
+    if [[ ${do_unittests} == 'yes' ]]; then
+        printf "\nRunning unit tests (ctest -L unit)\n"
+        run_unittests || true
+    fi
 
     # Regression test
     printf "\nUpdating regression tests repository...\n"

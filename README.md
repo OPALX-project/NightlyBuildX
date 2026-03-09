@@ -28,7 +28,7 @@ To run the standard workflow (update, build if needed, test if needed):
 *   `--publish-dir=DIR`: Directory to publish HTML results.
 *   `--force`, `-f`: Force compilation and running of all tests.
 *   `--compile`: Force compilation.
-*   `--unit-tests`: Force running unit tests (not implemented yet).
+*   `--unit-tests`: Force running unit tests (runs `ctest -L unit` in the build directory; requires `OPALX_ENABLE_UNIT_TESTS=ON` in your config).
 *   `--reg-tests`: Force running regression tests.
 
 ### Example
