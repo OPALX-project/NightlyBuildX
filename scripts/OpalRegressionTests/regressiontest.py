@@ -83,10 +83,10 @@ class OpalRegressionTests:
     def _getRevisionOpalx(self):
         exe = os.path.join(os.getenv("OPALX_EXE_PATH", ""), "opalx")
         if sys.version_info < (3,0):
-            src_dir = os.path.abspath(os.path.join(os.path.dirname(exe), "..", "..", "src"))
+            src_dir = os.path.abspath(os.path.join(os.path.dirname(exe), "..", "..", "..", "src"))
             return commands.getoutput("cd " + src_dir + " && git rev-parse HEAD")
         else:
-            src_dir = os.path.abspath(os.path.join(os.path.dirname(exe), "..", "..", "src"))
+            src_dir = os.path.abspath(os.path.join(os.path.dirname(exe), "..", "..", "..", "src"))
             try:
                 result = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
