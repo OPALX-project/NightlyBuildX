@@ -81,6 +81,11 @@ On further calls:
 
 OPTIONS:
 ===========
+--src-dir=DIR
+	Use an existing OPALX source directory DIR instead of cloning/updating
+	from GitHub. No Git operations are performed on DIR. If not set, the
+	default workspace source directory is used and updated from GitHub.
+
 --publish-dir=DIR
 	Prefix of the publication directory. If not set
 	or empty, no HTML output will be created.
@@ -123,6 +128,7 @@ declare	tests_repo_url="https://github.com/OPALX-project/regression-tests-x.git"
 # of the regression und unit tests. If empty, nothing will be
 # published.
 declare -x	publish_dir=''
+declare     opt_src_dir=''
 
 # run unit- and/or regression tests
 declare	opt_force='no'
@@ -161,6 +167,17 @@ while (( $# > 0 )); do
             fi
             if [[ -n ${publish_dir} ]]; then
                 publish_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${publish_dir}")
+            fi
+            ;;
+		--src-dir|--src-dir=* )
+             
+            if [[ $1 == *=* ]]; then
+                opt_src_dir="${1#*=}"
+            else
+                opt_src_dir="$2"; shift 1
+            fi
+            if [[ -n ${opt_src_dir} ]]; then
+                opt_src_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${opt_src_dir}")
             fi
             ;;
 		--compile )
@@ -225,10 +242,18 @@ declare -r bindir="${abs_scriptname%/*}"
 declare -r prefix="${bindir%/*}"
 declare -r workspace="${prefix}/workspace"
 declare -r branchdir="${workspace}/${branch}"
-declare -r srcdir="${branchdir}/src"
+declare    srcdir="${branchdir}/src"
 declare    builddir="${branchdir}/${architecture}/build"
 declare -r testsbase="${branchdir}/tests"
 declare -r testsdir="${testsbase}/RegressionTests"
+
+#-------------------------------------------------------------------------------
+# Resolve/validate optional external source directory
+#
+if [[ -n "${opt_src_dir}" ]]; then
+    [[ -d "${opt_src_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: --src-dir is not a directory: ${opt_src_dir}"
+    srcdir="${opt_src_dir}"
+fi
 
 # Result variables
 result_compile="-"
@@ -328,7 +353,8 @@ run_regressiontests() {
     opts+=("--timestamp=${timestamp}")
 
     # Run regression tests
-	salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+	#salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
 
     # Ensure existance of publishing directory
     local -i ec=$?
@@ -582,8 +608,12 @@ main() {
     local -r opalxbin="${builddir}/src/opalx"
     
     # Getting latest repo version
-    printf "\nUpdating OPALX source repository... \n"
-	update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+    if [[ -n "${opt_src_dir}" ]]; then
+        printf "\nUsing OPALX source directory (no git update): %s\n" "${srcdir}"
+    else
+        printf "\nUpdating OPALX source repository... \n"
+        update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+    fi
 
     # If the binary does not exist we need to compile
     [[ -e ${opalxbin} ]] || do_compile='yes'
