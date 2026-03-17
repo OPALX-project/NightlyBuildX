@@ -1,6 +1,5 @@
 import xml.dom
 import xml.dom.minidom
-import re
 
 class Reporter:
 
@@ -19,12 +18,6 @@ class Reporter:
     def getReport(self):
         return getattr(self, '_report', None)
 
-    def NrFailed(self):
-        return self._report.count("failed")
-
-    def NrBroken(self):
-        return self._report.count("broken")
-
     def appendChild(self, element):
         root = getattr(self, 'root_element', None)
         if root is None:
@@ -42,25 +35,6 @@ class Reporter:
             self.xml_report.appendChild(self.root_element)
 
         return self.xml_report
-
-    def dumpXML(self, filename, plots_dir):
-        xmlRep = getattr(self, 'xml_report', None)
-        if not xmlRep:
-            return
-        pi = xmlRep.createProcessingInstruction(
-            'xml-stylesheet',
-            'type="text/xsl" href="results.xslt"')
-        root = xmlRep.firstChild
-        xmlRep.insertBefore (pi, root)
-        content = self.xml_report.toprettyxml(indent='  ').format(plots_dir)
-        # Remove invalid control characters (except whitespace) to prevent XML parsing errors
-        content = ''.join(c for c in content if ord(c) >= 32 or c in '\n\r\t')
-        f = open (filename, "w")
-        try:
-            f.write (content)
-        finally:
-            f.close ()
-
 
 class TempXMLElement:
     def __init__(self, name):

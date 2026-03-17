@@ -2,4 +2,5 @@
 results/
 workspace/
 .DS_Store
+report/
 scripts/__pycache__/
