@@ -84,6 +84,27 @@
             </td>
           </tr>
         </table>
+        <xsl:if test="Tests/RunMetadata">
+          <h2><a name="run_metadata" class="no-hover">Run Metadata</a></h2>
+          <table border="0" style="margin-bottom: 25px">
+            <tr bgcolor="#9acd32">
+              <th>Host</th>
+              <th>Architecture</th>
+              <th>Backend</th>
+              <th>Ranks</th>
+              <th>Threads</th>
+              <th>Device</th>
+            </tr>
+            <tr>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/host"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/architecture"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/backend"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/mpi_ranks"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/omp_threads"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/device"/></td>
+            </tr>
+          </table>
+        </xsl:if>
         <h2>Regression Tests</h2>
         <xsl:if test="count(Tests/Simulation/Test[state]) &gt; 0">
           <table border="0" style="margin-bottom: 25px">

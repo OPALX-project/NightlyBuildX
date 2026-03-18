@@ -10,6 +10,7 @@ import shutil
 import pathlib
 import re
 import hashlib
+import socket
 
 from OpalRegressionTests.reporter import Reporter
 from OpalRegressionTests.reporter import TempXMLElement
@@ -54,6 +55,7 @@ class OpalRegressionTests:
                 shutil.rmtree(plot_dir)
 
         self._addDate(rep)
+        self._addRunMetadata(rep)
         for test in self.tests:
             rt = RegressionTest(
                 self.base_dir,
@@ -151,6 +153,37 @@ class OpalRegressionTests:
         revision_report.appendChild(full_tests_report)
 
         rep.appendChild(revision_report)
+
+    def _addRunMetadata(self, rep):
+        metadata_report = TempXMLElement("RunMetadata")
+
+        backend = "unknown"
+        architecture = os.getenv("NIGHTLYBUILDX_ARCHITECTURE", "unknown")
+        architecture_lower = architecture.lower()
+        if "cuda" in architecture_lower:
+            backend = "CUDA"
+        elif "hip" in architecture_lower:
+            backend = "HIP"
+        elif "openmp" in architecture_lower or "omp" in architecture_lower:
+            backend = "OPENMP"
+        elif "serial" in architecture_lower:
+            backend = "SERIAL"
+
+        entries = {
+            "host": socket.gethostname(),
+            "architecture": architecture,
+            "backend": backend,
+            "mpi_ranks": os.getenv("NIGHTLYBUILDX_MPI_RANKS", "1"),
+            "omp_threads": os.getenv("OMP_NUM_THREADS", "1"),
+            "device": os.getenv("NIGHTLYBUILDX_DEVICE", "none"),
+        }
+
+        for key, value in entries.items():
+            item = TempXMLElement(key)
+            item.appendTextNode(str(value))
+            metadata_report.appendChild(item)
+
+        rep.appendChild(metadata_report)
 
     def _publish_results (self):
         rep = Reporter ()

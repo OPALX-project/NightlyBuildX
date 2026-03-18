@@ -337,6 +337,8 @@ class StatTest:
         ax1.set_xlabel("s [m]")
         ax1.set_ylabel(f"{pretty_var} [{self.var_unit}]")
         ax2.set_ylabel(rf"$\Delta$ {pretty_var} [{self.var_unit}]")
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
 
         ax1.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
 
