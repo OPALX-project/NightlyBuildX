@@ -5,8 +5,8 @@
 #
 # Contract:
 # - You build OPALX yourself (this script never compiles).
-# - This script updates a local checkout of regression-tests-x,
-#   runs all regression tests using the provided build, produces matplotlib
+# - You provide the regression tests directory (this script does not clone/pull).
+# - This script runs regression tests using the provided build, produces matplotlib
 #   plots for .rt-defined stat quantities, and generates a modern HTML report.
 #
 
@@ -14,7 +14,6 @@ set -o errexit
 set -o pipefail
 
 declare -ri EC_ARG_ERROR=1
-declare -ri EC_GIT_ERROR=10
 declare -ri EC_RUNTIME_ERROR=20
 
 declare -r today="$(date +%Y-%m-%d)"
@@ -30,18 +29,18 @@ die() {
 usage() {
   cat 1>&2 <<'EOF'
 Usage:
-  run_tests --build <path/to/build> [--] [test1 test2 ...]
+  run_tests --build <path/to/build> --tests <path/to/RegressionTests> [--] [test1 test2 ...]
 
 Runs OPALX regression tests using an existing build.
 
 What it does:
-  1) Updates NightlyBuildX/regression-tests-x (clone on first run, pull later)
-  2) Runs all regression tests (or a subset if test names are provided)
-  3) Generates matplotlib plots (reference vs generated + difference) for .rt stat quantities
-  4) Writes a static HTML report under NightlyBuildX/report/
+  1) Runs all regression tests in the given tests folder (or a subset if test names are provided)
+  2) Generates matplotlib plots (reference vs generated + difference) for .rt stat quantities
+  3) Writes a static HTML report under NightlyBuildX/report/
 
 Required:
   --build <dir>   Build directory containing the OPALX executable at <dir>/src/opalx
+  --tests <dir>   Directory containing regression test subfolders (e.g. .../RegressionTests)
 
 Notes:
   - Any args after -- are treated as regression test names to run.
@@ -59,15 +58,13 @@ fi
 declare -r bindir="${abs_scriptname%/*}"
 declare -r nightlybuildx_dir="${bindir%/*}"
 
-declare -r tests_repo_url="https://github.com/OPALX-project/regression-tests-x.git"
-declare -r tests_repo_dir="${nightlybuildx_dir}/regression-tests-x"
-
 declare -r report_root="${nightlybuildx_dir}/report"
 declare -r run_dir="${report_root}/runs/${timestamp}"
 declare -r run_logs_dir="${run_dir}/logs"
 declare -r run_plots_dir="${run_dir}/plots"
 
 declare build_dir=""
+declare tests_dir=""
 declare -a tests=()
 
 while (( $# > 0 )); do
@@ -77,6 +74,13 @@ while (( $# > 0 )); do
         build_dir="${1#*=}"
       else
         build_dir="${2:-}"; shift 1
+      fi
+      ;;
+    --tests|--tests-dir|--tests=*|--tests-dir=* )
+      if [[ "$1" == *=* ]]; then
+        tests_dir="${1#*=}"
+      else
+        tests_dir="${2:-}"; shift 1
       fi
       ;;
     -h|-\?|--help )
@@ -102,8 +106,17 @@ while (( $# > 0 )); do
 done
 
 [[ -n "${build_dir}" ]] || usage
+[[ -n "${tests_dir}" ]] || usage
 build_dir="$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${build_dir}")"
 [[ -d "${build_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: --build is not a directory: ${build_dir}"
+tests_dir="$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${tests_dir}")"
+[[ -d "${tests_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: --tests is not a directory: ${tests_dir}"
+
+# Accept either a direct RegressionTests dir or a regression-tests-x repo root.
+# If a nested RegressionTests directory exists, prefer it.
+if [[ -d "${tests_dir}/RegressionTests" ]]; then
+  tests_dir="${tests_dir}/RegressionTests"
+fi
 
 declare -r opalx_exe="${build_dir}/src/opalx"
 [[ -f "${opalx_exe}" ]] || die ${EC_ARG_ERROR} "ERROR: OPALX executable not found at: ${opalx_exe}"
@@ -111,35 +124,15 @@ declare -r opalx_exe="${build_dir}/src/opalx"
 
 mkdir -p "${report_root}" "${run_logs_dir}" "${run_plots_dir}"
 
-update_regression_tests_repo() {
-  if [[ ! -d "${tests_repo_dir}" ]]; then
-    echo "Cloning regression-tests-x into ${tests_repo_dir}"
-    git clone "${tests_repo_url}" "${tests_repo_dir}" || die ${EC_GIT_ERROR} "ERROR: git clone failed"
-  fi
-
-  cd "${tests_repo_dir}"
-  git rev-parse --is-inside-work-tree 1>/dev/null 2>&1 || \
-    die ${EC_GIT_ERROR} "ERROR: ${tests_repo_dir} is not a git working directory"
-
-  echo "Updating regression-tests-x (fast-forward only)"
-  git fetch --prune || die ${EC_GIT_ERROR} "ERROR: git fetch failed"
-  # If a branch is checked out, pull. Otherwise, just update remote refs.
-  if git symbolic-ref -q HEAD 1>/dev/null 2>&1; then
-    git pull --ff-only || die ${EC_GIT_ERROR} "ERROR: git pull --ff-only failed"
-  fi
-}
-
 main() {
-  update_regression_tests_repo
-
   echo "Running regression tests using build: ${build_dir}"
+  echo "Using regression tests directory: ${tests_dir}"
   echo "Writing report to: ${run_dir}"
 
   local -r runner="${bindir}/run-reg-tests.py"
 
-  # The tests live in regression-tests-x/RegressionTests.
   local -a opts=()
-  opts+=( "--base-dir=${tests_repo_dir}/RegressionTests" )
+  opts+=( "--base-dir=${tests_dir}" )
   opts+=( "--publish-dir=${run_dir}" )
   opts+=( "--plots-dir=${run_plots_dir}" )
   opts+=( "--logs-dir=${run_logs_dir}" )

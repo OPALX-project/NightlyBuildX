@@ -219,11 +219,13 @@ class StatTest:
         revLine = header['parameters']['revision']['row']
         numScalars = len(header['parameters'])
         sCol = header['columns']['s']['column']
+        self.s_unit = header['columns'].get('s', {}).get('units', '')
         
         varCol = -1
         if self.var in header['columns']:
             varData = header['columns'][self.var]
             varCol = varData['column']
+            self.var_unit = varData.get('units', '')
         else:
             return []
         with open(fname,"r") as infile:
@@ -312,8 +314,10 @@ class StatTest:
 
         ax2.plot(s1, diff, lw=1.6, color="#ef4444", label="difference")
         ax2.axhline(0.0, lw=1.0, color="black", alpha=0.4)
-        ax2.set_xlabel("s [m]")
-        ax2.set_ylabel("Δ")
+        s_unit = getattr(self, "s_unit", "").strip()
+        ax2.set_xlabel(f"s [{s_unit}]" if s_unit else "s")
+        var_unit = getattr(self, "var_unit", "").strip()
+        ax2.set_ylabel(f"Δ [{var_unit}]" if var_unit else "Δ")
         ax2.grid(True, alpha=0.25)
 
         fig.tight_layout()

@@ -22,6 +22,9 @@ def write_report_assets(report_root: str) -> None:
 :root{
   --bg:#0b0f17; --panel:#0f172a; --panel2:#0b1220; --text:#e5e7eb; --muted:#94a3b8;
   --ok:#22c55e; --bad:#f59e0b; --broken:#ef4444; --border:#1f2a44; --link:#60a5fa;
+  --ok_bg: rgba(34,197,94,.14);
+  --bad_bg: rgba(245,158,11,.16);
+  --broken_bg: rgba(239,68,68,.14);
   --shadow: 0 8px 30px rgba(0,0,0,.35);
   --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
@@ -29,6 +32,9 @@ def write_report_assets(report_root: str) -> None:
 @media (prefers-color-scheme: light){
   :root{ --bg:#f7fafc; --panel:#ffffff; --panel2:#f1f5f9; --text:#0f172a; --muted:#475569;
     --ok:#16a34a; --bad:#d97706; --broken:#dc2626; --border:#e2e8f0; --link:#2563eb;
+    --ok_bg: rgba(22,163,74,.10);
+    --bad_bg: rgba(217,119,6,.12);
+    --broken_bg: rgba(220,38,38,.10);
     --shadow: 0 8px 30px rgba(15,23,42,.12);
   }
 }
@@ -107,6 +113,22 @@ input[type="search"]{
 details{
   border-top: 1px solid var(--border);
 }
+details.sim{
+  position: relative;
+}
+details.sim::before{
+  content:"";
+  position:absolute;
+  left:0; top:0; bottom:0;
+  width: 4px;
+  border-top-left-radius: 14px;
+  border-bottom-left-radius: 14px;
+  background: var(--border);
+  opacity: .9;
+}
+details.sim[data-status="ok"]::before{ background: var(--ok); }
+details.sim[data-status="bad"]::before{ background: var(--bad); }
+details.sim[data-status="broken"]::before{ background: var(--broken); }
 summary{
   list-style:none;
   cursor:pointer;
@@ -126,9 +148,21 @@ summary::-webkit-details-marker{ display:none; }
   border: 1px solid var(--border);
   background: rgba(255,255,255,.04);
 }
-.badge.ok{ border-color: color-mix(in srgb, var(--ok), var(--border) 65%); }
-.badge.bad{ border-color: color-mix(in srgb, var(--bad), var(--border) 65%); }
-.badge.broken{ border-color: color-mix(in srgb, var(--broken), var(--border) 65%); }
+.badge.ok{
+  border-color: color-mix(in srgb, var(--ok), var(--border) 55%);
+  background: var(--ok_bg);
+  color: color-mix(in srgb, var(--ok), var(--text) 35%);
+}
+.badge.bad{
+  border-color: color-mix(in srgb, var(--bad), var(--border) 55%);
+  background: var(--bad_bg);
+  color: color-mix(in srgb, var(--bad), var(--text) 35%);
+}
+.badge.broken{
+  border-color: color-mix(in srgb, var(--broken), var(--border) 55%);
+  background: var(--broken_bg);
+  color: color-mix(in srgb, var(--broken), var(--text) 35%);
+}
 .inner{ padding: 0 16px 14px; }
 table{
   width:100%;
@@ -150,11 +184,10 @@ tr:last-child td{ border-bottom:none; }
 .state.broken{ color: var(--broken); }
 .plots{
   display:grid;
-  grid-template-columns: repeat(2, minmax(0,1fr));
+  grid-template-columns: 1fr;
   gap: 10px;
   margin-top: 12px;
 }
-@media (max-width: 900px){ .plots{ grid-template-columns:1fr; } }
 .plotcard{ border: 1px solid var(--border); border-radius: 12px; overflow:hidden; background: var(--panel2); }
 .plotcard img{ width:100%; display:block; }
 .plotcap{ padding: 8px 10px; font-size: 12px; color: var(--muted); font-family: var(--mono); }
@@ -244,8 +277,12 @@ def write_run_report(report_root: str, run_dir: str, results: dict) -> None:
         if sim.get("log_relpath"):
             log_link = f"<span class='pill'><span class='dot ok'></span><a href='{_escape(sim.get('log_relpath'))}'>log</a></span>"
 
+        data_link = ""
+        if sim.get("data_url"):
+            data_link = f"<span class='pill'><span class='dot ok'></span><a href='{_escape(sim.get('data_url'))}'>data</a></span>"
+
         sims_html.append(
-            f"<details class='sim card' data-sim='{_escape(simname)}' data-desc='{_escape(desc)}'>"
+            f"<details class='sim card' data-status='{badge}' data-sim='{_escape(simname)}' data-desc='{_escape(desc)}'>"
             "<summary>"
             "<div class='summary-left'>"
             f"<div class='simname'>{_escape(simname)}</div>"
@@ -253,7 +290,7 @@ def write_run_report(report_root: str, run_dir: str, results: dict) -> None:
             "</div>"
             "<div class='summary-right'>"
             f"<span class='badge {badge}'>passed:{counts['passed']} failed:{counts['failed']} broken:{counts['broken']}</span>"
-            f"{log_link}"
+            f"{log_link}{data_link}"
             "</div>"
             "</summary>"
             "<div class='inner'>"
@@ -287,8 +324,7 @@ def write_run_report(report_root: str, run_dir: str, results: dict) -> None:
       <div class="pill"><span class="dot ok"></span><a href="../index.html">overview</a></div>
     </div>
 
-    <div class="grid">
-      <div class="card p">
+    <div class="card p">
         <div class="kpis">
           <div class="kpi"><div class="label">total</div><div class="value">{summary.get('total','-')}</div></div>
           <div class="kpi"><div class="label">passed</div><div class="value">{summary.get('passed','-')}</div></div>
@@ -301,18 +337,9 @@ def write_run_report(report_root: str, run_dir: str, results: dict) -> None:
           <span class="pill"><span class="dot bad"></span>failed</span>
           <span class="pill"><span class="dot broken"></span>broken</span>
         </div>
-      </div>
-      <div class="card p">
-        <div class="subtitle">Artifacts</div>
-        <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
-          <span class="pill"><span class="dot ok"></span><a href="results.json">results.json</a></span>
-          <span class="pill"><span class="dot ok"></span><a href="plots/">plots/</a></span>
-          <span class="pill"><span class="dot ok"></span><a href="logs/">logs/</a></span>
-        </div>
         <div class="footer" style="margin-top:14px;">
           Generated {html.escape(datetime.datetime.now().isoformat(timespec='seconds'))}
         </div>
-      </div>
     </div>
 
     <div class="tests card" style="margin-top:14px;">

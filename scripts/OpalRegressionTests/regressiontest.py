@@ -51,7 +51,7 @@ class OpalRegressionTests:
         }
 
         for test in self.tests:
-            rt = RegressionTest(self.base_dir, test, self.opalx_args)
+            rt = RegressionTest(self.base_dir, test, self.opalx_args, timestamp=self.timestamp)
             rt.run()
             self.totalNrTests += rt.totalNrTests
             self.totalNrPassed += rt.totalNrPassed
@@ -166,16 +166,61 @@ class OpalRegressionTests:
 
 class RegressionTest:
 
-    def __init__(self, base_dir, simname, args):
+    def __init__(self, base_dir, simname, args, timestamp=None):
         self.dirname = os.path.join (base_dir, simname)
         self.simname = simname
         self.args = args
+        self.timestamp = timestamp or datetime.datetime.today().strftime("%Y-%m-%d_%H-%M")
         self.jobnr = -1
         self.totalNrTests = 0
         self.totalNrPassed = 0
         self.queue = ""
         self.date = datetime.date.today().isoformat()
         self.result = None
+        self._staged_data_dir = None
+        self._baseline_files = set()
+
+    def _stage_generated_files(self):
+        """
+        Move generated output files into data/ inside this test directory.
+
+        We move only *newly created* files (compared to the baseline captured
+        before the simulation run) to avoid moving static inputs shipped with the test.
+        """
+        data_dir = os.path.join(self.dirname, "data")
+        pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
+
+        moved_any = False
+        keep_names = {
+            self.simname + ".in",
+            self.simname + ".rt",
+            self.simname + ".local",
+            self.simname + ".sge",
+            "disabled",
+        }
+
+        for p in pathlib.Path(self.dirname).iterdir():
+            if not p.is_file():
+                continue
+            if p.name.startswith("."):
+                continue
+            if p.name in keep_names:
+                continue
+            if p.name in self._baseline_files:
+                continue
+
+            try:
+                shutil.move(str(p), os.path.join(data_dir, p.name))
+                moved_any = True
+            except Exception:
+                # Best-effort staging; don't break the run for staging issues
+                continue
+
+        if moved_any:
+            self._staged_data_dir = data_dir
+            if self.result is not None:
+                self.result["data_path"] = data_dir
+                self.result["data_url"] = "file://" + data_dir
 
     def _check_md5sum (self, fname_md5sum):
         """
@@ -278,6 +323,8 @@ class RegressionTest:
         self.queue = q
         self._cleanup()
         self._validateReferenceFiles()
+        # Capture baseline file set (static inputs shipped with the test)
+        self._baseline_files = {p.name for p in pathlib.Path(self.dirname).iterdir() if p.is_file()}
 
         rep = Reporter()
         rep.appendReport("Run regression test " + self.simname + "\n")
@@ -393,6 +440,9 @@ class RegressionTest:
                 shutil.copy(src, dst)
                 if self.result is not None:
                     self.result["log_relpath"] = os.path.relpath(dst, os.path.join(logs_dir, ".."))
+
+        # After capture, move generated files into data/<timestamp>/
+        self._stage_generated_files()
 
     def mpirun(self):
         os.chdir(self.dirname)
