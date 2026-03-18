@@ -16,12 +16,22 @@ from OpalRegressionTests.reporter import TempXMLElement
 import OpalRegressionTests.stattest as stattest
 
 class OpalRegressionTests:
-    def __init__(self, base_dir, tests, opalx_args, publish_dir = None, timestamp = None, use_gnuplot = True):
+    def __init__(
+        self,
+        base_dir,
+        tests,
+        opalx_args,
+        publish_dir = None,
+        timestamp = None,
+        use_gnuplot = True,
+        generate_web_page = False,
+    ):
         self.base_dir = base_dir
         self.tests = tests
         self.opalx_args = opalx_args
         self.publish_dir = publish_dir
         self.use_gnuplot = use_gnuplot
+        self.generate_web_page = generate_web_page
         self.totalNrPassed = 0
         self.totalNrTests = 0
         self.rundir = sys.path[0]
@@ -45,7 +55,13 @@ class OpalRegressionTests:
 
         self._addDate(rep)
         for test in self.tests:
-            rt = RegressionTest(self.base_dir, test, self.opalx_args, self.use_gnuplot)
+            rt = RegressionTest(
+                self.base_dir,
+                test,
+                self.opalx_args,
+                self.use_gnuplot,
+                generate_web_page=self.generate_web_page,
+            )
             if compare_only:
                 rt.compare_only()
             else:
@@ -180,11 +196,12 @@ class OpalRegressionTests:
 
 class RegressionTest:
 
-    def __init__(self, base_dir, simname, args, use_gnuplot = True):
+    def __init__(self, base_dir, simname, args, use_gnuplot = True, generate_web_page = False):
         self.dirname = os.path.join (base_dir, simname)
         self.simname = simname
         self.args = args
         self.use_gnuplot = use_gnuplot
+        self.generate_web_page = generate_web_page
         self.jobnr = -1
         self.totalNrTests = 0
         self.totalNrPassed = 0
@@ -314,6 +331,8 @@ class RegressionTest:
 
         self._process_results(rep, success)
         self._write_timing_overview()
+        if self.generate_web_page:
+            self._write_local_plot_summary()
 
     def compare_only(self):
         os.chdir(self.dirname)
@@ -664,9 +683,10 @@ class RegressionTest:
 
         For smb tests the file name is <simname>-bunch-idBunch.smb
         """
+        test = test.split("#", 1)[0].rstrip()
         nameparams = str.split(test,"\"")
         var = nameparams[1]
-        params = str.split(nameparams[2].lstrip(), " ")
+        params = nameparams[2].split()
         rtest = 0
         if "stat" in test:
             rtest = stattest.StatTest(var, params[0], float(params[1]),
