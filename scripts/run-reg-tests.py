@@ -52,6 +52,22 @@ def scan_for_tests (dir):
     # Return the list of tests sorted alphabetically
     return sorted(tests)
 
+
+def resolve_local_test():
+    current_dir = os.getcwd()
+    simname = os.path.basename(current_dir)
+    basename = os.path.join(current_dir, simname)
+
+    if not (
+        os.path.isfile(basename + ".in")
+        and os.path.isdir(os.path.join(current_dir, "reference"))
+        and os.path.isfile(os.path.join(current_dir, "reference", simname + ".stat"))
+    ):
+        print(f"{current_dir} - current directory is not a regression test directory!")
+        sys.exit(1)
+
+    return os.path.dirname(current_dir), simname
+
 def main(argv):
     parser = argparse.ArgumentParser(description='Run regression tests.')
     parser.add_argument('tests',
@@ -74,17 +90,27 @@ def main(argv):
                         dest='timestamp', type=str,
                         help='timestamp to use in file names',
 			default=[])
+    parser.add_argument('--run-local-now',
+                        dest='run_local_now', action='store_true',
+                        help='Only compare existing local outputs and generate plots in the current test directory')
+    parser.add_argument('--no-gpl',
+                        dest='no_gpl', action='store_true',
+                        help='Use Python plotting instead of gnuplot for comparison plots')
 
     args = parser.parse_args()
 
     args.opalx_args = [item for sublist in args.opalx_args for item in sublist]
     #print(args.opalx_args)
 
-    # Get the directory holding the regression tests 
-    if args.base_dir:
+    if args.run_local_now:
+        base_dir, local_test = resolve_local_test()
+        tests = [local_test]
+    elif args.base_dir:
         base_dir = os.path.abspath(args.base_dir)
+        tests = None
     else:
         base_dir = os.getcwd()
+        tests = None
     if not os.path.isdir (base_dir):
         print ("%s - regression tests base directory does not exist!" %
                (base_dir))
@@ -99,38 +125,49 @@ def main(argv):
     if publish_dir and not os.path.exists(publish_dir):
         os.makedirs(publish_dir)
 
-    # Get the directory holding the OPALX executable
-    try:
-        if args.opalx_exe_path:
-            os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
-        elif os.getenv("OPALX_EXE_PATH"):
-            args.opalx_exe_path = os.getenv("OPALX_EXE_PATH")
-        else:
-            args.opalx_exe_path = os.path.dirname(shutil.which("opalx"))
-            os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
+    if not args.run_local_now:
+        try:
+            if args.opalx_exe_path:
+                os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
+            elif os.getenv("OPALX_EXE_PATH"):
+                args.opalx_exe_path = os.getenv("OPALX_EXE_PATH")
+            else:
+                args.opalx_exe_path = os.path.dirname(shutil.which("opalx"))
+                os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
 
-        opalx = os.path.join(args.opalx_exe_path, "opalx")
-        if not (os.path.isfile(opalx) and os.access(opalx, os.X_OK)):
-            raise FileNotFoundError
-    except:
-        print ("opalx - not found or not an executablet!")
-        sys.exit(1)
+            opalx = os.path.join(args.opalx_exe_path, "opalx")
+            if not (os.path.isfile(opalx) and os.access(opalx, os.X_OK)):
+                raise FileNotFoundError
+        except:
+            print ("opalx - not found or not an executablet!")
+            sys.exit(1)
 
     # Scan for the tests
-    tests = scan_for_tests(base_dir)
-    if args.tests:
+    if tests is None:
+        tests = scan_for_tests(base_dir)
+    if args.tests and not args.run_local_now:
         for test in args.tests:
             if not test in tests:
                 print("%s - unknown test!" % (test))
                 sys.exit(1)
         tests = sorted(args.tests)
 
-    print ("Running the following regression tests:")
+    if args.run_local_now:
+        print ("Comparing the following local regression test:")
+    else:
+        print ("Running the following regression tests:")
     for test in tests:
         print ("    {}".format(test))
     
-    rt = OpalRegressionTests.OpalRegressionTests(base_dir, tests, args.opalx_args, publish_dir, args.timestamp)
-    rt.run()
+    rt = OpalRegressionTests.OpalRegressionTests(
+        base_dir,
+        tests,
+        args.opalx_args,
+        publish_dir,
+        args.timestamp,
+        use_gnuplot=not args.no_gpl,
+    )
+    rt.run(compare_only=args.run_local_now)
 
 
 if __name__ == "__main__":

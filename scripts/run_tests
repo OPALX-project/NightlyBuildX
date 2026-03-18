@@ -101,6 +101,14 @@ OPTIONS:
 	Run regression-tests even OPAL has not been compiled and the
 	tests has not been changed.
 
+--run-local-now
+	Skip update/build/run and only generate comparison plots for the
+	local regression test in the current directory.
+
+--no-gpl
+	Use Python plotting instead of gnuplot for regression comparison
+	plots.
+
 -f | --force
 	Force compiling OPAL and run unit- and regression-tests.
 
@@ -129,6 +137,8 @@ declare	opt_force='no'
 declare	do_compile='no'
 declare do_unittests='no'
 declare do_regtests='no'
+declare do_run_local_now='no'
+declare do_no_gpl='no'
 
 # configuration file
 declare	opt_config_file="default-${branch}.conf"
@@ -169,6 +179,12 @@ while (( $# > 0 )); do
         --reg-tests )
             do_regtests='yes'
             ;;
+        --run-local-now )
+            do_run_local_now='yes'
+            ;;
+        --no-gpl )
+            do_no_gpl='yes'
+            ;;
         --unit-tests )
             do_unittests='yes'
 			;;
@@ -192,7 +208,9 @@ while (( $# > 0 )); do
 	shift 1
 done
 
-mkdir -p "${publish_dir}"
+if [[ -n "${publish_dir}" ]]; then
+    mkdir -p "${publish_dir}"
+fi
 
 # Ensure unit tests are enabled for nightly builds unless explicitly set in config (match NightlyBuildX).
 case " ${cmake_args[*]} " in
@@ -326,9 +344,16 @@ run_regressiontests() {
     opts+=("--opalx-exe-path=${builddir}/src")
 	opts+=("--base-dir=${testsdir}")
     opts+=("--timestamp=${timestamp}")
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        opts+=("--no-gpl")
+    fi
 
     # Run regression tests
-	salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    if command -v salloc >/dev/null 2>&1 && sinfo >/dev/null 2>&1; then
+        salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    else
+        python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    fi
 
     # Ensure existance of publishing directory
     local -i ec=$?
@@ -358,6 +383,20 @@ run_regressiontests() {
     result_r_broken=${broken}
 
     return ${ec}
+}
+
+run_local_now() {
+    local -r run_tests="${bindir}/run-reg-tests.py"
+    local opts=("--run-local-now")
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        opts+=("--no-gpl")
+    fi
+
+    if [[ -n "${publish_dir}" ]]; then
+        opts+=("--publish-dir=${publish_dir}")
+    fi
+
+    python3 "${run_tests}" "${opts[@]}"
 }
 
 run_unittests() {
@@ -578,6 +617,11 @@ update_master_landing_page() {
 }
 
 main() {
+    if [[ "${do_run_local_now}" == 'yes' ]]; then
+        run_local_now
+        return $?
+    fi
+
     # local variable for the opalx binary
     local -r opalxbin="${builddir}/src/opalx"
     
