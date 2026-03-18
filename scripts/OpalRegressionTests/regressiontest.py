@@ -329,8 +329,8 @@ class RegressionTest:
         if os.path.isfile (self.simname + "-RT.o"):
             shutil.copy (self.simname + "-RT.o", self.simname + ".out")
 
-        self._process_results(rep, success)
-        self._write_timing_overview()
+        timing_plot = self._write_timing_overview()
+        self._process_results(rep, success, timing_plot)
         if self.generate_web_page:
             self._write_local_plot_summary()
 
@@ -342,11 +342,11 @@ class RegressionTest:
         rep.appendReport("Compare local regression test " + self.simname + "\n")
 
         success = self._validateOutputFiles()
-        self._process_results(rep, success)
-        self._write_timing_overview()
+        timing_plot = self._write_timing_overview()
+        self._process_results(rep, success, timing_plot)
         self._write_local_plot_summary()
 
-    def _process_results(self, rep, success):
+    def _process_results(self, rep, success, timing_plot = None):
         if success:
             rep.appendReport("Reference output files OK\n")
         else:
@@ -398,6 +398,11 @@ class RegressionTest:
             self.totalNrTests += 1
             if success:
                 self.totalNrPassed += 1
+
+        if timing_plot:
+            timing_plot_report = TempXMLElement("timing_plot")
+            timing_plot_report.appendTextNode("{0}/" + os.path.basename(timing_plot))
+            simulation_report.appendChild(timing_plot_report)
 
         return success
 
@@ -510,7 +515,7 @@ class RegressionTest:
     def _write_timing_overview(self):
         timing_path = pathlib.Path(self.dirname) / "timing.dat"
         reference_timing_path = pathlib.Path(self.dirname) / "reference" / "timing.dat"
-        if not timing_path.is_file():
+        if not timing_path.is_file() or not reference_timing_path.is_file():
             return False
 
         try:
@@ -526,7 +531,7 @@ class RegressionTest:
             return False
         timers.pop("mainTimer", None)
 
-        _, reference_timers = self._parse_timing_file(reference_timing_path) if reference_timing_path.is_file() else (None, {})
+        _, reference_timers = self._parse_timing_file(reference_timing_path)
         reference_timers.pop("mainTimer", None)
         selected = self._select_dominant_timers(total_wall, timers)
         if not selected:
@@ -616,9 +621,10 @@ class RegressionTest:
         ax.legend(handles=legend_handles, loc="upper right")
 
         fig.tight_layout()
-        fig.savefig(pathlib.Path(self.dirname) / "timing-overview.png", bbox_inches="tight")
+        output_path = pathlib.Path(self.dirname) / f"{self.simname}_timing-overview.png"
+        fig.savefig(output_path, bbox_inches="tight")
         plt.close(fig)
-        return True
+        return str(output_path)
 
     def publish(self, plots_dir):
         if not plots_dir:

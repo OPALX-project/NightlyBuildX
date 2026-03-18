@@ -179,6 +179,10 @@
                 </xsl:if>
 
               </xsl:for-each>
+              <xsl:if test="timing_plot">
+                <img style="margin-right:3px; margin-bottom:3px;" src="{timing_plot}" alt="" title="" />
+                <br/><br/>
+              </xsl:if>
               <br/>
             </p>
           </div>
