@@ -2,6 +2,18 @@
 
 Automated build and testing framework for OPALX. This repository contains scripts to fetch, build, and test the OPALX project and its regression tests.
 
+NightlyBuildX now supports a local regression-analysis workflow in addition to the full nightly path. The new **--run-local-now** mode compares existing outputs without updating repositories, rebuilding OPALX, rerunning tests, or launching new
+  simulations. The related **--only-generate-web-page** mode can be used from either a single test directory or the parent RegressionTests directory and generates the usual regression HTML/XML report locally, including copied plot assets and index pages.
+
+  Regression comparison plotting now supports two backends. By default the suite uses gnuplot; with --no-gpl it switches to a Python/matplotlib backend. The wrapper checks these dependencies early and fails with a clear message if the required plotting
+  tool is not available. The Python plots were also cleaned up for readability, including explicit scientific tick labels and improved delta-axis formatting.
+
+  The reporting side was extended as well. Local runs can generate plot-summary.html, and published regression pages now include per-test timing-overview plots when both timing.dat and reference/timing.dat are available. The results pages also show a
+  global run-metadata block with host, architecture, backend, ranks, threads, and device. Finally, **run_tests* now accepts **--opalx-branch** and **--regtests-branch** so branch selection can be overridden directly on the command line while still allowing config
+  files to provide the defaults.
+
+
+
 ## Overview
 
 The core of this system is the `scripts/run_tests` bash script:
