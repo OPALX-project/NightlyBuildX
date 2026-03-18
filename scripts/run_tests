@@ -366,6 +366,16 @@ compile_opalx() {
     result_compile='ok'
 }
 
+check_plot_dependencies() {
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        python3 -c "import matplotlib" >/dev/null 2>&1 || \
+            die 1 "ERROR: --no-gpl requires matplotlib, but Python cannot import it."
+    else
+        command -v gnuplot >/dev/null 2>&1 || \
+            die 1 "ERROR: gnuplot is required for regression comparison plots. Use --no-gpl to switch to the Python plotting backend."
+    fi
+}
+
 run_regressiontests() {
     # Python file to run tests
     local -r run_tests="${bindir}/run-reg-tests.py"
@@ -680,6 +690,13 @@ update_master_landing_page() {
 }
 
 main() {
+    if [[ "${do_run_local_now}" == 'yes' || \
+          "${do_regtests}" == 'yes' || \
+          "${do_generate_web_page}" == 'yes' || \
+          "${opt_force}" == 'yes' ]]; then
+        check_plot_dependencies
+    fi
+
     if [[ "${do_run_local_now}" == 'yes' || \
           ( "${do_generate_web_page}" == 'yes' && \
             "${do_compile}" == 'no' && \
