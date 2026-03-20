@@ -5,3 +5,4 @@ workspace/
 report/
 scripts/__pycache__/
 regression-tests-x/
+*.png
