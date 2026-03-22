@@ -65,6 +65,12 @@ a:hover{ text-decoration:underline; }
   border-radius: 14px;
   box-shadow: var(--shadow);
 }
+.cardlink{
+  display:block;
+  color: inherit;
+  text-decoration: none;
+}
+.cardlink:hover{ text-decoration: none; }
 .card.runstatus{ position: relative; overflow: hidden; }
 .card.runstatus::before{
   content:"";
@@ -76,8 +82,8 @@ a:hover{ text-decoration:underline; }
   background: transparent;
 }
 .card.runstatus.ok::before{ background: transparent; }
-.card.runstatus.bad::before{ background: var(--bad_bg); }
-.card.runstatus.broken::before{ background: var(--broken_bg); }
+.card.runstatus.bad::before{ background: transparent; }
+.card.runstatus.broken::before{ background: transparent; }
 .card.runstatus > *{ position: relative; }
 .grid{
   display:grid;
@@ -139,7 +145,7 @@ input[type="search"]{
 }
 .tests{ margin-top: 12px; }
 details{
-  border-top: 1px solid var(--border);
+  border-top: 0;
 }
 details.sim{
   position: relative;
@@ -154,8 +160,8 @@ details.sim::before{
   background: transparent;
 }
 details.sim[data-status="ok"]::before{ background: transparent; }
-details.sim[data-status="bad"]::before{ background: var(--bad_bg); }
-details.sim[data-status="broken"]::before{ background: var(--broken_bg); }
+details.sim[data-status="bad"]::before{ background: transparent; }
+details.sim[data-status="broken"]::before{ background: transparent; }
 summary{
   list-style:none;
   cursor:pointer;
@@ -307,6 +313,14 @@ def _count_states(sim):
 def _escape(s):
     return html.escape(s if s is not None else "")
 
+def _unit_badge(unit: dict) -> str:
+    state = (unit or {}).get("state", "")
+    if state == "passed":
+        return "ok"
+    if state == "failed":
+        return "bad"
+    return "broken"
+
 def _format_ts_for_display(ts: str) -> str:
     """
     Convert our timestamp formats into a nicer display string.
@@ -339,14 +353,55 @@ def write_run_report(report_root: str, run_dir: str, results: dict) -> None:
     rev_code = (results.get("revisions") or {}).get("code_full", "")
     rev_tests = (results.get("revisions") or {}).get("tests_full", "")
     summary = results.get("summary") or {}
+    unit = results.get("unit_tests") or {}
     build = results.get("build") or {}
     build_dir = build.get("build_dir") or ""
     build_info = (build.get("info") or {})
 
+    unit_html = ""
     sims_html = []
+    if unit:
+        unit_state = unit.get("state", "not-run")
+        unit_badge = _unit_badge(unit)
+        unit_total = unit.get("total", "-")
+        unit_passed = unit.get("passed", "-")
+        unit_failed = unit.get("failed", "-")
+        unit_log_link = ""
+        if unit.get("log_relpath"):
+            unit_log_link = f"<a class='linkbtn' href='{_escape(unit.get('log_relpath'))}'>log</a>"
+        unit_html = (
+            f"<details class='sim card' data-status='{unit_badge}' data-sim='unit-tests' data-desc='ctest -L unit'>"
+            "<summary>"
+            "<div class='summary-left'>"
+            "<div class='simname'>Unit tests</div>"
+            "<div class='desc'>Aggregate ctest -L unit results</div>"
+            "</div>"
+            "<div class='summary-right'>"
+            f"<div><span class='badge {unit_badge}'>total:{_escape(str(unit_total))} passed:{_escape(str(unit_passed))} failed:{_escape(str(unit_failed))}</span></div>"
+            f"<div class='links'>{unit_log_link}</div>"
+            "</div>"
+            "</summary>"
+            "<div class='inner'>"
+            "<table>"
+            "<thead><tr><th>Suite</th><th>Total</th><th>Passed</th><th>Failed</th><th>State</th></tr></thead>"
+            "<tbody>"
+            "<tr>"
+            "<td class='simname'>ctest -L unit</td>"
+            f"<td class='simname'>{_escape(str(unit_total))}</td>"
+            f"<td class='simname'>{_escape(str(unit_passed))}</td>"
+            f"<td class='simname'>{_escape(str(unit_failed))}</td>"
+            f"<td class='state {unit_state}'>{_escape(unit_state)}</td>"
+            "</tr>"
+            "</tbody>"
+            "</table>"
+            "</div>"
+            "</details>"
+        )
     for sim in results.get("simulations", []):
         simname = sim.get("name", "")
         desc = sim.get("description", "")
+        if not simname and not desc and not sim.get("tests"):
+            continue
         counts = _count_states(sim)
         badge = "ok" if (counts["failed"] == 0 and counts["broken"] == 0) else ("broken" if counts["broken"] else "bad")
 
@@ -425,7 +480,7 @@ def write_run_report(report_root: str, run_dir: str, results: dict) -> None:
         <div class="subtitle">Run <span class="simname">{_escape(run_disp or timestamp)}</span> · started <span class="simname">{_escape(started_disp or started)}</span></div>
         <div class="subtitle">code <span class="simname">{_escape(rev_code[:12])}</span> · tests <span class="simname">{_escape(rev_tests[:12])}</span></div>
       </div>
-      <div class="pill"><span class="dot ok"></span><a href="../index.html">overview</a></div>
+      <div></div>
     </div>
 
     <div class="card p">
@@ -450,8 +505,18 @@ def write_run_report(report_root: str, run_dir: str, results: dict) -> None:
         </div>
     </div>
 
-    <div class="tests card" style="margin-top:14px;">
-      {''.join(sims_html) if sims_html else '<div class="p">No simulations executed.</div>'}
+    <div class="card p" style="margin-top:14px;">
+      <div class="subtitle">Unit test results</div>
+      <div style="margin-top:10px;">
+        {unit_html if unit_html else '<div class="subtitle">No unit tests summary available.</div>'}
+      </div>
+    </div>
+
+    <div class="card p" style="margin-top:14px;">
+      <div class="subtitle">Regression test results</div>
+      <div class="tests" style="margin-top:10px;">
+        {''.join(sims_html) if sims_html else '<div class="subtitle">No regression simulations executed.</div>'}
+      </div>
     </div>
   </div>
 </body>
@@ -479,14 +544,18 @@ def update_overview(report_root: str) -> None:
         except Exception:
             continue
         s = (data.get("summary") or {})
+        unit = (data.get("unit_tests") or {})
         run_disp = _format_ts_for_display(run)
         badge = "ok" if (s.get("failed", 0) == 0 and s.get("broken", 0) == 0) else ("broken" if s.get("broken", 0) else "bad")
+        unit_badge = _unit_badge(unit)
         cards.append(
+            f"<a class='cardlink' href='runs/{_escape(run)}/index.html'>"
             f"<div class='card p runstatus {badge}' style='display:flex; align-items:center; justify-content:space-between; gap:12px;'>"
-            f"<div><div class='simname'>{_escape(run_disp or run)}</div><div class='subtitle'>total {s.get('total','-')} · passed {s.get('passed','-')} · failed {s.get('failed','-')} · broken {s.get('broken','-')}</div></div>"
-            f"<div style='display:flex; gap:10px; align-items:center;'><span class='badge {badge}'>status</span>"
-            f"<span class='pill'><span class='dot ok'></span><a href='runs/{_escape(run)}/index.html'>open</a></span></div>"
+            f"<div><div class='simname'>{_escape(run_disp or run)}</div></div>"
+            f"<div style='display:flex; gap:10px; align-items:center;'><span class='badge {badge}'>reg</span>"
+            f"<span class='badge {unit_badge}'>unit</span></div>"
             "</div>"
+            "</a>"
         )
 
     index = f"""<!doctype html>

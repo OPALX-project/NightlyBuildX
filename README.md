@@ -22,6 +22,17 @@ To run the standard workflow (update, build if needed, test if needed):
 ./scripts/run_tests
 ```
 
+### Local runner behavior (`scripts/run_tests`)
+
+The local runner executes both test phases:
+
+1. Unit tests first (`ctest -L unit` in the provided build directory).
+2. Regression tests next (from the provided tests directory).
+
+Regression tests still run even if unit tests fail, but the overall command exits with a non-zero status if either phase fails.
+
+Generated report artifacts include a `unit_tests` summary in `results.json`, and both run-level HTML and overview HTML display unit-test status and counts.
+
 ### Options
 
 *   `--config=FILE`: Specify a configuration file (e.g., from `scripts/config/`).

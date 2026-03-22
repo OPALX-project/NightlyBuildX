@@ -83,6 +83,10 @@ def main(argv):
                         dest='timestamp', type=str,
                         help='timestamp to use in file names',
 			default=[])
+    parser.add_argument('--unit-tests-summary',
+                        dest='unit_tests_summary', type=str,
+                        help='path to JSON summary for unit tests',
+                        default=None)
 
     # Support passing tests after a literal "--" (run_tests uses this)
     if "--" in argv:
@@ -147,6 +151,7 @@ def main(argv):
     plots_dir = os.path.abspath(args.plots_dir) if args.plots_dir else None
     logs_dir = os.path.abspath(args.logs_dir) if args.logs_dir else None
     build_dir = os.path.abspath(args.build_dir) if args.build_dir else None
+    unit_tests_summary = os.path.abspath(args.unit_tests_summary) if args.unit_tests_summary else None
 
     rt = OpalRegressionTests.OpalRegressionTests(
         base_dir=base_dir,
@@ -158,6 +163,7 @@ def main(argv):
         logs_dir=logs_dir,
         opalx_exe=opalx,
         build_dir=build_dir,
+        unit_tests_summary=unit_tests_summary,
     )
     rt.run()
 

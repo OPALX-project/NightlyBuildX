@@ -34,9 +34,10 @@ Usage:
 Runs OPALX regression tests using an existing build.
 
 What it does:
-  1) Runs all regression tests in the given tests folder (or a subset if test names are provided)
-  2) Generates matplotlib plots (reference vs generated + difference) for .rt stat quantities
-  3) Writes a static HTML report under NightlyBuildX/report/
+  1) Runs unit tests (`ctest -L unit`) in the build directory
+  2) Runs all regression tests in the given tests folder (or a subset if test names are provided)
+  3) Generates matplotlib plots (reference vs generated + difference) for .rt stat quantities
+  4) Writes a static HTML report under NightlyBuildX/report/
 
 Required:
   --build <dir>   Build directory containing the OPALX executable at <dir>/src/opalx
@@ -62,6 +63,8 @@ declare -r report_root="${nightlybuildx_dir}/report"
 declare -r run_dir="${report_root}/runs/${timestamp}"
 declare -r run_logs_dir="${run_dir}/logs"
 declare -r run_plots_dir="${run_dir}/plots"
+declare -r unit_log_file="${run_logs_dir}/unit-tests.out"
+declare -r unit_summary_file="${run_dir}/unit-tests-summary.json"
 
 declare build_dir=""
 declare tests_dir=""
@@ -125,6 +128,9 @@ declare -r opalx_exe="${build_dir}/src/opalx"
 mkdir -p "${report_root}" "${run_logs_dir}" "${run_plots_dir}"
 
 main() {
+  local reg_exit=0
+  local unit_exit=0
+
   echo "Running regression tests using build: ${build_dir}"
   echo "Using regression tests directory: ${tests_dir}"
   echo "Writing report to: ${run_dir}"
@@ -139,8 +145,79 @@ main() {
   opts+=( "--build-dir=${build_dir}" )
   opts+=( "--opalx-exe=${opalx_exe}" )
   opts+=( "--timestamp=${timestamp}" )
+  opts+=( "--unit-tests-summary=${unit_summary_file}" )
 
-  python3 "${runner}" "${opts[@]}" -- "${tests[@]}" || die ${EC_RUNTIME_ERROR} "ERROR: regression tests failed"
+  echo "Running unit tests (ctest -L unit) in: ${build_dir}"
+  {
+    echo "# ctest -L unit"
+    echo "# started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    ( cd "${build_dir}" && ctest -L unit )
+  } > "${unit_log_file}" 2>&1 || unit_exit=$?
+
+  python3 - "$unit_log_file" "$unit_exit" "$unit_summary_file" <<'PY'
+import json
+import re
+import sys
+
+log_path = sys.argv[1]
+unit_exit = int(sys.argv[2])
+out_path = sys.argv[3]
+
+content = ""
+try:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+        content = f.read()
+except OSError:
+    content = ""
+
+total = 0
+failed = 0
+passed = 0
+
+m = re.search(r"(\d+)\s+tests?\s+failed\s+out\s+of\s+(\d+)", content, re.IGNORECASE)
+if m:
+    failed = int(m.group(1))
+    total = int(m.group(2))
+else:
+    m = re.search(r"(\d+)%\s+tests?\s+passed,\s+(\d+)\s+tests?\s+failed\s+out\s+of\s+(\d+)", content, re.IGNORECASE)
+    if m:
+        failed = int(m.group(2))
+        total = int(m.group(3))
+    else:
+        m = re.search(r"No tests were found!!!", content, re.IGNORECASE)
+        if m:
+            total = 0
+            failed = 0
+
+passed = max(total - failed, 0)
+if total == 0 and unit_exit == 0:
+    state = "passed"
+elif unit_exit == 0 and failed == 0:
+    state = "passed"
+else:
+    state = "failed"
+
+payload = {
+    "state": state,
+    "total": total,
+    "passed": passed,
+    "failed": failed,
+    "log_relpath": "logs/unit-tests.out",
+}
+
+with open(out_path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, indent=2, sort_keys=False)
+PY
+
+if (( unit_exit != 0 )); then
+    echo "Unit tests failed (exit=${unit_exit}); continuing with regression tests."
+fi
+
+  python3 "${runner}" "${opts[@]}" -- "${tests[@]}" || reg_exit=$?
+
+  if (( unit_exit != 0 || reg_exit != 0 )); then
+    die ${EC_RUNTIME_ERROR} "ERROR: tests failed (unit_exit=${unit_exit}, regression_exit=${reg_exit})"
+  fi
 
   echo "Done. Open ${report_root}/index.html"
 }

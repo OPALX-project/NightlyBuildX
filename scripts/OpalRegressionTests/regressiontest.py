@@ -69,7 +69,7 @@ def _select_build_info(cache: dict) -> dict:
     return info
 
 class OpalRegressionTests:
-    def __init__(self, base_dir, tests, opalx_args, publish_dir=None, timestamp=None, plots_dir=None, logs_dir=None, opalx_exe=None, build_dir=None):
+    def __init__(self, base_dir, tests, opalx_args, publish_dir=None, timestamp=None, plots_dir=None, logs_dir=None, opalx_exe=None, build_dir=None, unit_tests_summary=None):
         self.base_dir = base_dir
         self.tests = tests
         self.opalx_args = opalx_args
@@ -78,6 +78,7 @@ class OpalRegressionTests:
         self.logs_dir = logs_dir
         self.opalx_exe = opalx_exe
         self.build_dir = build_dir
+        self.unit_tests_summary = unit_tests_summary
         self.totalNrPassed = 0
         self.totalNrTests = 0
         self.rundir = sys.path[0]
@@ -106,6 +107,12 @@ class OpalRegressionTests:
             "summary": {"total": 0, "passed": 0, "failed": 0, "broken": 0},
             "simulations": [],
         }
+        if self.unit_tests_summary and os.path.isfile(self.unit_tests_summary):
+            try:
+                with open(self.unit_tests_summary, "r", encoding="utf-8") as f:
+                    run_results["unit_tests"] = json.load(f)
+            except Exception:
+                pass
 
         if self.build_dir:
             cache_path = os.path.join(self.build_dir, "CMakeCache.txt")
