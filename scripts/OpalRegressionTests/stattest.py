@@ -2,7 +2,7 @@
 
 import os
 import re
-import subprocess
+import math
 
 from OpalRegressionTests.reporter import Reporter
 from OpalRegressionTests.reporter import TempXMLElement
@@ -42,6 +42,15 @@ class StatTest:
         delta_report = TempXMLElement("delta")
         delta_report.appendTextNode("-")
         root.appendChild(delta_report)
+        self.last_result = {
+            "type": "stat",
+            "var": self.var,
+            "mode": self.quant,
+            "eps": str(self.eps),
+            "delta": "-",
+            "state": "broken",
+            "plot": None,
+        }
         return False
         
     def checkResult(self, root):
@@ -118,10 +127,24 @@ class StatTest:
         root.appendChild(delta_report)
 
         plotfilename = self._plot()
-        if plotfilename != "":
+        plot_rel = None
+        if plotfilename:
             fname = os.path.basename(plotfilename)
-            plot_report.appendTextNode("{0}/" + fname)
+            # Keep a stable relative path format for the HTML report:
+            # plots/<simname>/<filename>
+            plot_rel = "plots/{0}/" + fname
+            plot_report.appendTextNode(plot_rel)
             root.appendChild(plot_report)
+
+        self.last_result = {
+            "type": "stat",
+            "var": self.var,
+            "mode": self.quant,
+            "eps": str(self.eps),
+            "delta": str(val),
+            "state": ("passed" if passed else "failed"),
+            "plot": (plot_rel.format(self.name) if plot_rel else None),
+        }
 
         return passed
 
@@ -196,17 +219,19 @@ class StatTest:
         revLine = header['parameters']['revision']['row']
         numScalars = len(header['parameters'])
         sCol = header['columns']['s']['column']
+        self.s_unit = header['columns'].get('s', {}).get('units', '')
         
         varCol = -1
         if self.var in header['columns']:
             varData = header['columns'][self.var]
             varCol = varData['column']
+            self.var_unit = varData.get('units', '')
         else:
             return []
         with open(fname,"r") as infile:
             lines = [line.rstrip('\n') for line in infile]
     
-        m = re.search('(.* git rev\. )#([A-Za-z0-9]{7})[A-Za-z0-9]*', lines[readLines + revLine]);
+        m = re.search(r'(.* git rev\. )#([A-Za-z0-9]{7})[A-Za-z0-9]*', lines[readLines + revLine])
         if m:
             revision = m.group(1) + m.group(2)
         else:
@@ -235,7 +260,7 @@ class StatTest:
 
         stat_data = [line.rstrip('\n') for line in open(stat_file)]
 
-        m = re.search('(.* git rev\. )#([A-Za-z0-9]{7})[A-Za-z0-9]*', stat_data[readLines + revLine]);
+        m = re.search(r'(.* git rev\. )#([A-Za-z0-9]{7})[A-Za-z0-9]*', stat_data[readLines + revLine])
         if m:
             revision = m.group(1) + m.group(2)
         else:
@@ -249,14 +274,24 @@ class StatTest:
         return revision
 
     def _plot(self):
-        stat_plot_file = os.path.join(self.prefix, 'data1.dat')
-        opalRevision = self._read_stat_file(self.fname, stat_plot_file)
-        if not opalRevision:
-            return False
-        reference_plot_file = os.path.join(self.prefix, 'data2.dat')
-        refRevision = self._read_stat_file(self.reference_fname, reference_plot_file)
-        if not refRevision:
-            return False
+        # Matplotlib is intentionally imported lazily to keep startup fast and
+        # to provide a clearer error if it's not installed.
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except Exception as e:
+            rep = Reporter()
+            rep.appendReport(f"ERROR: matplotlib not available ({e})\n")
+            return ""
+
+        _opalRevision, s1, y1 = self._readStatVariable(self.fname)
+        _refRevision, s2, y2 = self._readStatVariable(self.reference_fname)
+        if not s1 or not s2 or len(s1) != len(s2):
+            return ""
+
+        # Compute difference (generated - reference)
+        diff = [a - b for a, b in zip(y1, y2)]
 
         varParts = str.split(self.var, "_")
         prettyVar = varParts[0]
@@ -264,21 +299,29 @@ class StatTest:
             prettyVar = varParts[0] + "(" + varParts[1] + ")"
 
         output_fname = os.path.join(self.prefix, self.name + "_" + self.var + ".png")
-        plotcmd = "set terminal pngcairo\n"
-        plotcmd += "set output '" + output_fname + "'\n"
-        plotcmd += "set title '" + self.name + "'\n"
-        plotcmd += "set key below\n"
-        plotcmd += "set ytics nomirror\n"
-        plotcmd += "set y2tics\n"
-        plotcmd += "set ylabel '" + prettyVar + " [" + self.var_unit + "]' font 'Helvetica-Bold,20'\n"
-        plotcmd += "set y2label 'delta " + prettyVar + " [" + self.var_unit + "]' font 'Helvetica-Bold,20'\n"
-        plotcmd += "set xlabel 's [m]' font 'Helvetica-Bold,20'\n"
-        plotcmd += "plot '" +  stat_plot_file + "' u 1:2 w l lw 2 t '" + opalRevision + "', "
-        plotcmd += "'" + reference_plot_file + "' u 1:2 w l lw 2 t '" + refRevision + "', "
-        plotcmd += "\"< paste " + stat_plot_file + " " + reference_plot_file + "\" u 1:($2-$4) w l lw 2 axis x1y2 t 'difference'" + ";\n"
-        plot = subprocess.Popen(['gnuplot'], stdin=subprocess.PIPE)
-        plot.communicate(bytes(plotcmd, "UTF-8"))
-        os.remove(stat_plot_file)
-        os.remove(reference_plot_file)
-            
+
+        # Use constrained layout to avoid tight_layout warnings with shared axes/gridspec.
+        fig = plt.figure(figsize=(10.5, 6.5), dpi=140, constrained_layout=True)
+        gs = fig.add_gridspec(2, 1, height_ratios=[3, 1], hspace=0.12)
+        ax = fig.add_subplot(gs[0, 0])
+        ax2 = fig.add_subplot(gs[1, 0], sharex=ax)
+
+        ax.plot(s1, y1, lw=1.8, label="simulation")
+        ax.plot(s2, y2, lw=1.8, label="reference")
+        ax.set_ylabel(f"{prettyVar} [{getattr(self, 'var_unit', '').strip()}]".strip())
+        ax.grid(True, alpha=0.25)
+        ax.legend(loc="upper right", fontsize=8)
+        ax.set_title(self.name)
+
+        ax2.plot(s1, diff, lw=1.6, color="#ef4444", label="difference")
+        ax2.axhline(0.0, lw=1.0, color="black", alpha=0.4)
+        s_unit = getattr(self, "s_unit", "").strip()
+        ax2.set_xlabel(f"s [{s_unit}]" if s_unit else "s")
+        var_unit = getattr(self, "var_unit", "").strip()
+        ax2.set_ylabel(f"Δ [{var_unit}]" if var_unit else "Δ")
+        ax2.grid(True, alpha=0.25)
+
+        fig.savefig(output_fname)
+        plt.close(fig)
+
         return output_fname

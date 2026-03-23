@@ -10,17 +10,75 @@ import shutil
 import pathlib
 import re
 import hashlib
+import json
 
 from OpalRegressionTests.reporter import Reporter
 from OpalRegressionTests.reporter import TempXMLElement
 import OpalRegressionTests.stattest as stattest
+from OpalRegressionTests.sitegen import write_report_assets, write_run_report, update_overview
+
+def _parse_cmake_cache(cache_path: str) -> dict:
+    """
+    Parse a CMakeCache.txt into a simple key/value dict.
+    """
+    out = {}
+    if not cache_path or not os.path.isfile(cache_path):
+        return out
+    try:
+        with open(cache_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("//") or line.startswith("#"):
+                    continue
+                if ":" not in line or "=" not in line:
+                    continue
+                # KEY:TYPE=VALUE
+                key_type, value = line.split("=", 1)
+                key, _typ = key_type.split(":", 1)
+                out[key] = value
+    except Exception:
+        return {}
+    return out
+
+def _select_build_info(cache: dict) -> dict:
+    """
+    Keep a focused subset of build information for display.
+    """
+    info = {}
+
+    build_type = cache.get("CMAKE_BUILD_TYPE") or "-"
+    info["Build Type"] = build_type
+
+    # Kokkos Architecture: pick the first Kokkos_ARCH_* that is ON.
+    arch_on = []
+    for k, v in cache.items():
+        if k.startswith("Kokkos_ARCH_") and str(v).upper() in {"ON", "TRUE", "1"}:
+            arch_on.append(k.replace("Kokkos_ARCH_", ""))
+    arch_on.sort()
+    info["Kokkos Architecture"] = (", ".join(arch_on) if arch_on else "-")
+
+    # CPU vs GPU: primarily driven by Kokkos backend selection.
+    kokkos_cuda = str(cache.get("Kokkos_ENABLE_CUDA", "OFF")).upper() in {"ON", "TRUE", "1"}
+    kokkos_hip = str(cache.get("Kokkos_ENABLE_HIP", "OFF")).upper() in {"ON", "TRUE", "1"}
+    info["Device"] = "GPU" if (kokkos_cuda or kokkos_hip) else "CPU"
+
+    # Compiler: prefer CXX compiler (path), fall back to C compiler.
+    compiler = cache.get("CMAKE_CXX_COMPILER") or cache.get("CMAKE_C_COMPILER") or "-"
+    info["Compiler"] = compiler
+
+    return info
 
 class OpalRegressionTests:
-    def __init__(self, base_dir, tests, opalx_args, publish_dir = None, timestamp = None):
+    def __init__(self, base_dir, tests, opalx_args, publish_dir=None, timestamp=None, plots_dir=None, logs_dir=None, opalx_exe=None, build_dir=None, unit_tests_summary=None):
         self.base_dir = base_dir
         self.tests = tests
         self.opalx_args = opalx_args
         self.publish_dir = publish_dir
+        self.plots_dir = plots_dir
+        self.logs_dir = logs_dir
+        self.opalx_exe = opalx_exe
+        self.build_dir = build_dir
+        self.unit_tests_summary = unit_tests_summary
         self.totalNrPassed = 0
         self.totalNrTests = 0
         self.rundir = sys.path[0]
@@ -35,29 +93,71 @@ class OpalRegressionTests:
         if not self.timestamp:
             self.timestamp = self.today.strftime("%Y-%m-%d")
 
-        # clean old results if exist
-        plot_dir = None
-        if self.publish_dir:
-            plot_dir = os.path.join(self.publish_dir, "plots_" + self.timestamp)
-            if os.path.isdir(plot_dir):
-                shutil.rmtree(plot_dir)
-
         self._addDate(rep)
+        run_results = {
+            "timestamp": self.timestamp,
+            "started_at": self.today.isoformat(),
+            "opalx_exe": self.opalx_exe,
+            "build": {
+                "build_dir": self.build_dir,
+                "cmake_cache": {},
+                "info": {},
+            },
+            "revisions": {},
+            "summary": {"total": 0, "passed": 0, "failed": 0, "broken": 0},
+            "simulations": [],
+        }
+        if self.unit_tests_summary and os.path.isfile(self.unit_tests_summary):
+            try:
+                with open(self.unit_tests_summary, "r", encoding="utf-8") as f:
+                    run_results["unit_tests"] = json.load(f)
+            except Exception:
+                pass
+
+        if self.build_dir:
+            cache_path = os.path.join(self.build_dir, "CMakeCache.txt")
+            cache = _parse_cmake_cache(cache_path)
+            run_results["build"]["cmake_cache"] = cache_path if os.path.isfile(cache_path) else None
+            run_results["build"]["info"] = _select_build_info(cache)
+
         for test in self.tests:
-            rt = RegressionTest(self.base_dir, test, self.opalx_args)
+            rt = RegressionTest(self.base_dir, test, self.opalx_args, timestamp=self.timestamp)
             rt.run()
             self.totalNrTests += rt.totalNrTests
             self.totalNrPassed += rt.totalNrPassed
-            rt.publish(plot_dir)
+            rt.publish(self.plots_dir, self.logs_dir)
+            if rt.result is not None:
+                run_results["simulations"].append(rt.result)
 
         self._addRevisionStrings(rep)
+        run_results["revisions"] = {
+            "code_full": self._getRevisionOpalx(),
+            "tests_full": self._getRevisionTests(),
+        }
+
+        # Summary
+        # Reporter counts are string-based and include old text; prefer computed state counts from results.
+        for sim in run_results["simulations"]:
+            for t in sim.get("tests", []):
+                run_results["summary"]["total"] += 1
+                state = t.get("state")
+                if state == "passed":
+                    run_results["summary"]["passed"] += 1
+                elif state == "failed":
+                    run_results["summary"]["failed"] += 1
+                elif state == "broken":
+                    run_results["summary"]["broken"] += 1
 
         if self.publish_dir:
-            results_file = os.path.join(self.publish_dir, "results_" + self.timestamp + ".xml")
-            if os.path.isfile(results_file):
-                os.remove (results_file)
-            rep.dumpXML(results_file, "plots_" + self.timestamp)
-            self._publish_results()
+            os.makedirs(self.publish_dir, exist_ok=True)
+            results_json = os.path.join(self.publish_dir, "results.json")
+            with open(results_json, "w", encoding="utf-8") as f:
+                json.dump(run_results, f, indent=2, sort_keys=False)
+
+            report_root = os.path.abspath(os.path.join(self.publish_dir, "..", ".."))
+            write_report_assets(report_root)
+            write_run_report(report_root=report_root, run_dir=self.publish_dir, results=run_results)
+            update_overview(report_root=report_root)
 
         rep.appendReport("\nSummary: {passed} / {total} tests passed \n".format(
             passed = self.totalNrPassed,
@@ -132,59 +232,65 @@ class OpalRegressionTests:
 
         rep.appendChild(revision_report)
 
-    def _publish_results (self):
-        rep = Reporter ()
-
-        #webfilename = "results_" + self.timestamp + ".xml"
-        webfilename = "results_" + self.timestamp + ".html"
-
-        index_fname = os.path.join (self.publish_dir, "index.html")
-        if not os.path.exists(index_fname):
-            shutil.copy (os.path.join (self.rundir, os.path.join("html", "index.html")), index_fname)
-
-        # update 'index.html'
-        indexhtml = open(index_fname).readlines()
-
-        # search for the string 'insert here'
-        for line in range(len(indexhtml)):
-            if "insert here" in indexhtml[line]:
-                m = re.search(webfilename, indexhtml[line + 1])
-                fmt="<a href=\"%s\">%04d-%02d-%02d %02d:%02d</a> [passed:%d | broken:%d | failed:%d | total:%d] <br/>\n"
-                text = fmt % (webfilename,
-                              self.today.year, self.today.month, self.today.day,
-                              self.today.hour, self.today.minute,
-                              self.totalNrPassed, rep.NrBroken(), rep.NrFailed(),
-                              self.totalNrTests)
-
-                if m != None:
-                    # result for today already exist, replace it
-                    indexhtml[line+1] = text
-                else:
-                    # first run
-                    indexhtml.insert(line+1, text)
-                break
-        # write new 'index.html' back
-        indexhtmlout = open(index_fname, "w")
-        indexhtmlout.writelines(indexhtml)
-        indexhtmlout.close()
-
-        # update various files to publish directory
-        shutil.copy (os.path.join (self.rundir, "html", "ok.png"), self.publish_dir);
-        shutil.copy (os.path.join (self.rundir, "html", "nok.png"), self.publish_dir);
-        shutil.copy (os.path.join (self.rundir, "html", "results.xslt"), self.publish_dir)
-        shutil.copy (os.path.join (self.rundir, "html", "accordion.js"), self.publish_dir)
+    # Legacy XML/XSLT publishing removed in favor of JSON+static HTML.
 
 class RegressionTest:
 
-    def __init__(self, base_dir, simname, args):
+    def __init__(self, base_dir, simname, args, timestamp=None):
         self.dirname = os.path.join (base_dir, simname)
         self.simname = simname
         self.args = args
+        self.timestamp = timestamp or datetime.datetime.today().strftime("%Y-%m-%d_%H-%M")
         self.jobnr = -1
         self.totalNrTests = 0
         self.totalNrPassed = 0
         self.queue = ""
         self.date = datetime.date.today().isoformat()
+        self.result = None
+        self._staged_data_dir = None
+        self._baseline_files = set()
+
+    def _stage_generated_files(self):
+        """
+        Move generated output files into data/ inside this test directory.
+
+        We move only *newly created* files (compared to the baseline captured
+        before the simulation run) to avoid moving static inputs shipped with the test.
+        """
+        data_dir = os.path.join(self.dirname, "data")
+        pathlib.Path(data_dir).mkdir(parents=True, exist_ok=True)
+
+        moved_any = False
+        keep_names = {
+            self.simname + ".in",
+            self.simname + ".rt",
+            self.simname + ".local",
+            self.simname + ".sge",
+            "disabled",
+        }
+
+        for p in pathlib.Path(self.dirname).iterdir():
+            if not p.is_file():
+                continue
+            if p.name.startswith("."):
+                continue
+            if p.name in keep_names:
+                continue
+            if p.name in self._baseline_files:
+                continue
+
+            try:
+                shutil.move(str(p), os.path.join(data_dir, p.name))
+                moved_any = True
+            except Exception:
+                # Best-effort staging; don't break the run for staging issues
+                continue
+
+        if moved_any:
+            self._staged_data_dir = data_dir
+            if self.result is not None:
+                self.result["data_path"] = data_dir
+                self.result["data_url"] = "file://" + data_dir
 
     def _check_md5sum (self, fname_md5sum):
         """
@@ -287,6 +393,8 @@ class RegressionTest:
         self.queue = q
         self._cleanup()
         self._validateReferenceFiles()
+        # Capture baseline file set (static inputs shipped with the test)
+        self._baseline_files = {p.name for p in pathlib.Path(self.dirname).iterdir() if p.is_file()}
 
         rep = Reporter()
         rep.appendReport("Run regression test " + self.simname + "\n")
@@ -303,15 +411,24 @@ class RegressionTest:
         if os.path.isfile (self.simname + "-RT.o"):
             shutil.copy (self.simname + "-RT.o", self.simname + ".out")
 
-        success = self._validateOutputFiles()
-        if success:
+        output_ok = self._validateOutputFiles()
+        if output_ok:
             rep.appendReport("Reference output files OK\n")
         else:
-            return False
+            # Do not abort: still parse the .rt file so we can report
+            # each requested check as broken (missing outputs, execution error, etc.).
+            rep.appendReport("ERROR: output validation failed; marking checks as broken where applicable\n")
 
         simulation_report = TempXMLElement("Simulation")
         simulation_report.addAttribute("name", self.simname)
         simulation_report.addAttribute("date", "%s" % self.date)
+        self.result = {
+            "name": self.simname,
+            "date": self.date,
+            "description": "",
+            "tests": [],
+            "log_relpath": None,
+        }
 
         rt_filename = self.simname + ".rt"
         if os.path.exists(rt_filename):
@@ -322,6 +439,7 @@ class RegressionTest:
             if not success:
                 description += ". Test failed."
             simulation_report.addAttribute("description", description)
+            self.result["description"] = description
 
             rep.appendChild(simulation_report)
             # loop over all tests in rt file, first line is a comment, skip this line
@@ -334,6 +452,11 @@ class RegressionTest:
                         if passed:
                             self.totalNrPassed += 1
                         simulation_report.appendChild(test_root)
+
+                        # capture structured info (for report)
+                        r = getattr(self, "_last_check_result", None)
+                        if r is not None:
+                            self.result["tests"].append(r)
                 except Exception:
                     exc_info = sys.exc_info()
                     sys.excepthook(*exc_info)
@@ -353,18 +476,43 @@ class RegressionTest:
             
             simulation_report.addAttribute("description", description)
             rep.appendChild(simulation_report)
+            self.result["description"] = description
             
-            # Count this as one test
+            # Count this as one coarse-grained check
             self.totalNrTests += 1
-            if success:
+            if success and output_ok:
                 self.totalNrPassed += 1
+            else:
+                self.result["tests"].append({
+                    "type": "execution",
+                    "var": "execution",
+                    "mode": "run",
+                    "eps": "-",
+                    "delta": "-",
+                    "state": "broken",
+                    "plot": None,
+                })
 
-    def publish(self, plots_dir):
-        if not plots_dir:
-            return False
-        pathlib.Path(plots_dir).mkdir(parents=True, exist_ok=True)
-        for p in pathlib.Path(".").glob("*.png"):
-            shutil.copy (p, plots_dir)
+    def publish(self, plots_dir, logs_dir):
+        # Copy plots into plots_dir/<simname>/
+        if plots_dir:
+            sim_plots_dir = os.path.join(plots_dir, self.simname)
+            pathlib.Path(sim_plots_dir).mkdir(parents=True, exist_ok=True)
+            for p in pathlib.Path(".").glob("*.png"):
+                shutil.copy(p, sim_plots_dir)
+
+        # Copy the combined stdout/stderr log into logs_dir
+        if logs_dir:
+            pathlib.Path(logs_dir).mkdir(parents=True, exist_ok=True)
+            src = os.path.join(self.dirname, self.simname + "-RT.o")
+            if os.path.isfile(src):
+                dst = os.path.join(logs_dir, self.simname + ".out")
+                shutil.copy(src, dst)
+                if self.result is not None:
+                    self.result["log_relpath"] = os.path.relpath(dst, os.path.join(logs_dir, ".."))
+
+        # After capture, move generated files into data/<timestamp>/
+        self._stage_generated_files()
 
     def mpirun(self):
         os.chdir(self.dirname)
@@ -432,4 +580,6 @@ class RegressionTest:
         else:
             return None
 
-        return rtest.checkResult(root)
+        passed = rtest.checkResult(root)
+        self._last_check_result = getattr(rtest, "last_result", None)
+        return passed

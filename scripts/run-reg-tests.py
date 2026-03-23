@@ -55,17 +55,26 @@ def scan_for_tests (dir):
 def main(argv):
     parser = argparse.ArgumentParser(description='Run regression tests.')
     parser.add_argument('tests',
-                        metavar='tests', type=str, nargs='*', default = '',
-                        help='a regression test to run')
+                        metavar='tests', type=str, nargs='*', default='',
+                        help='regression tests to run (default: all)')
     parser.add_argument('--base-dir',
                         dest='base_dir', type=str,
                         help='base directory with regression tests')
     parser.add_argument('--publish-dir',
                         dest='publish_dir', type=str,
                         help='publish directory')
-    parser.add_argument('--opalx-exe-path',
-                        dest='opalx_exe_path', type=str,
-                        help='directory where OPAL binary is stored')
+    parser.add_argument('--plots-dir',
+                        dest='plots_dir', type=str,
+                        help='directory where plots will be written/copied')
+    parser.add_argument('--logs-dir',
+                        dest='logs_dir', type=str,
+                        help='directory where per-test logs will be written')
+    parser.add_argument('--build-dir',
+                        dest='build_dir', type=str,
+                        help='OPALX build directory (used to read CMakeCache.txt)')
+    parser.add_argument('--opalx-exe',
+                        dest='opalx_exe', type=str,
+                        help='full path to OPALX executable')
     parser.add_argument('--opalx-args',
                         dest='opalx_args', nargs='*', action='append',
                         help='arguments passed to OPAL',
@@ -74,8 +83,20 @@ def main(argv):
                         dest='timestamp', type=str,
                         help='timestamp to use in file names',
 			default=[])
+    parser.add_argument('--unit-tests-summary',
+                        dest='unit_tests_summary', type=str,
+                        help='path to JSON summary for unit tests',
+                        default=None)
 
-    args = parser.parse_args()
+    # Support passing tests after a literal "--" (run_tests uses this)
+    if "--" in argv:
+        idx = argv.index("--")
+        known, rest = argv[:idx], argv[idx+1:]
+        args = parser.parse_args(known)
+        if rest:
+            args.tests = rest
+    else:
+        args = parser.parse_args(argv)
 
     args.opalx_args = [item for sublist in args.opalx_args for item in sublist]
     #print(args.opalx_args)
@@ -99,22 +120,20 @@ def main(argv):
     if publish_dir and not os.path.exists(publish_dir):
         os.makedirs(publish_dir)
 
-    # Get the directory holding the OPALX executable
-    try:
-        if args.opalx_exe_path:
-            os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
-        elif os.getenv("OPALX_EXE_PATH"):
-            args.opalx_exe_path = os.getenv("OPALX_EXE_PATH")
-        else:
-            args.opalx_exe_path = os.path.dirname(shutil.which("opalx"))
-            os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
+    # Resolve OPALX executable
+    if args.opalx_exe:
+        opalx = os.path.abspath(args.opalx_exe)
+    else:
+        # fallback to PATH
+        opalx = shutil.which("opalx")
+        if opalx:
+            opalx = os.path.abspath(opalx)
 
-        opalx = os.path.join(args.opalx_exe_path, "opalx")
-        if not (os.path.isfile(opalx) and os.access(opalx, os.X_OK)):
-            raise FileNotFoundError
-    except:
-        print ("opalx - not found or not an executablet!")
+    if not opalx or not (os.path.isfile(opalx) and os.access(opalx, os.X_OK)):
+        print("opalx - not found or not executable. Provide --opalx-exe.")
         sys.exit(1)
+
+    os.environ['OPALX_EXE_PATH'] = os.path.dirname(opalx)
 
     # Scan for the tests
     tests = scan_for_tests(base_dir)
@@ -129,7 +148,23 @@ def main(argv):
     for test in tests:
         print ("    {}".format(test))
     
-    rt = OpalRegressionTests.OpalRegressionTests(base_dir, tests, args.opalx_args, publish_dir, args.timestamp)
+    plots_dir = os.path.abspath(args.plots_dir) if args.plots_dir else None
+    logs_dir = os.path.abspath(args.logs_dir) if args.logs_dir else None
+    build_dir = os.path.abspath(args.build_dir) if args.build_dir else None
+    unit_tests_summary = os.path.abspath(args.unit_tests_summary) if args.unit_tests_summary else None
+
+    rt = OpalRegressionTests.OpalRegressionTests(
+        base_dir=base_dir,
+        tests=tests,
+        opalx_args=args.opalx_args,
+        publish_dir=publish_dir,
+        timestamp=args.timestamp,
+        plots_dir=plots_dir,
+        logs_dir=logs_dir,
+        opalx_exe=opalx,
+        build_dir=build_dir,
+        unit_tests_summary=unit_tests_summary,
+    )
     rt.run()
 
 
