@@ -86,4 +86,4 @@ The architecture setting affects:
 **Note**: Source code and tests are shared across architectures to avoid duplication, while build directories are architecture-specific to allow parallel builds.
 
 ## Regression Tests
-The regression tests are located on the `cleanup` branch in the [regression-tests-x](https://github.com/OPALX-project/regression-tests-x/tree/cleanup) repository of the OPALX project.
+The regression tests are located in the [regression-tests-x](https://github.com/OPALX-project/regression-tests-x) repository of the OPALX project.
