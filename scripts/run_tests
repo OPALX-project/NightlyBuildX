@@ -87,9 +87,18 @@ OPTIONS:
 
 --config=FILE
 	The options above can be defined in the configuration FILE.
-	Configuration files can also set the 'architecture' variable
+	Configuration files can also set the default 'branch',
+	'regtests_branch', and 'architecture' variables
 	(e.g., cpu-serial, cpu-openmp, gpu-cuda-a100) to organize
 	builds and results by architecture.
+
+--opalx-branch=BRANCH
+	Override the OPALX branch to check out. If not set, the
+	configuration file default is used.
+
+--regtests-branch=BRANCH
+	Override the regression-tests branch to check out. If not set,
+	the configuration file default is used.
 	
 --compile
 	Compile OPAL even nothing changed and a binary exists.
@@ -100,6 +109,20 @@ OPTIONS:
 --reg-tests
 	Run regression-tests even OPAL has not been compiled and the
 	tests has not been changed.
+
+--run-local-now
+	Skip update/build/run and only generate comparison plots for the
+	local regression test in the current directory.
+
+--no-gpl
+	Use Python plotting instead of gnuplot for regression comparison
+	plots.
+
+--only-generate-web-page
+	Write a local `plot-summary.html` page in each regression test
+	directory after plot generation. If this is the only action flag,
+	run in local compare-only mode without update/build/run and also
+	generate the standard regression results HTML/XML page locally.
 
 -f | --force
 	Force compiling OPAL and run unit- and regression-tests.
@@ -129,9 +152,14 @@ declare	opt_force='no'
 declare	do_compile='no'
 declare do_unittests='no'
 declare do_regtests='no'
+declare do_run_local_now='no'
+declare do_no_gpl='no'
+declare do_generate_web_page='no'
 
 # configuration file
 declare	opt_config_file="default-${branch}.conf"
+declare opt_opalx_branch=""
+declare opt_regtests_branch=""
 
 # tests to run, all if non passed as argument
 declare -a tests=()
@@ -163,11 +191,34 @@ while (( $# > 0 )); do
                 publish_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${publish_dir}")
             fi
             ;;
+        --opalx-branch|--opalx-branch=* )
+            if [[ $1 == *=* ]]; then
+                opt_opalx_branch="${1#*=}"
+            else
+                opt_opalx_branch="$2"; shift 1
+            fi
+            ;;
+        --regtests-branch|--regtests-branch=* )
+            if [[ $1 == *=* ]]; then
+                opt_regtests_branch="${1#*=}"
+            else
+                opt_regtests_branch="$2"; shift 1
+            fi
+            ;;
 		--compile )
 			do_compile='yes'
 			;;
         --reg-tests )
             do_regtests='yes'
+            ;;
+        --run-local-now )
+            do_run_local_now='yes'
+            ;;
+        --no-gpl )
+            do_no_gpl='yes'
+            ;;
+        --only-generate-web-page )
+            do_generate_web_page='yes'
             ;;
         --unit-tests )
             do_unittests='yes'
@@ -192,7 +243,17 @@ while (( $# > 0 )); do
 	shift 1
 done
 
-mkdir -p "${publish_dir}"
+if [[ -n "${opt_opalx_branch}" ]]; then
+    branch="${opt_opalx_branch}"
+fi
+
+if [[ -n "${opt_regtests_branch}" ]]; then
+    regtests_branch="${opt_regtests_branch}"
+fi
+
+if [[ -n "${publish_dir}" ]]; then
+    mkdir -p "${publish_dir}"
+fi
 
 # Ensure unit tests are enabled for nightly builds unless explicitly set in config (match NightlyBuildX).
 case " ${cmake_args[*]} " in
@@ -305,6 +366,16 @@ compile_opalx() {
     result_compile='ok'
 }
 
+check_plot_dependencies() {
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        python3 -c "import matplotlib" >/dev/null 2>&1 || \
+            die 1 "ERROR: --no-gpl requires matplotlib, but Python cannot import it."
+    else
+        command -v gnuplot >/dev/null 2>&1 || \
+            die 1 "ERROR: gnuplot is required for regression comparison plots. Use --no-gpl to switch to the Python plotting backend."
+    fi
+}
+
 run_regressiontests() {
     # Python file to run tests
     local -r run_tests="${bindir}/run-reg-tests.py"
@@ -326,9 +397,19 @@ run_regressiontests() {
     opts+=("--opalx-exe-path=${builddir}/src")
 	opts+=("--base-dir=${testsdir}")
     opts+=("--timestamp=${timestamp}")
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        opts+=("--no-gpl")
+    fi
+    if [[ "${do_generate_web_page}" == 'yes' ]]; then
+        opts+=("--only-generate-web-page")
+    fi
 
     # Run regression tests
-	salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    if command -v salloc >/dev/null 2>&1 && sinfo >/dev/null 2>&1; then
+        salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    else
+        python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    fi
 
     # Ensure existance of publishing directory
     local -i ec=$?
@@ -343,19 +424,50 @@ run_regressiontests() {
 
     # get results from HTML file created/updated by regression-tests 
     local index_html="${publish_regtests_dir}/index.html"
-    read passed broken failed total < <(
-            awk "/${timestamp}/ {
-                    split(\$4, p, \":\");
-                    split(\$6, b, \":\");
-                    split(\$8, f, \":\");
-                    split(\$10, t,  \":\");
-                    printf \"%s %s %s %s\n\", p[2], b[2], f[2], t[2]; exit}" \
-                            < "${index_html}")
-    result_r_total=${total/\]}
-    result_r_passed=${passed}
-    result_r_failed=${failed}
-    result_r_disabled='-'
-    result_r_broken=${broken}
+    if [[ -f "${index_html}" ]]; then
+        read passed broken failed total < <(
+                awk "/${timestamp}/ {
+                        split(\$4, p, \":\");
+                        split(\$6, b, \":\");
+                        split(\$8, f, \":\");
+                        split(\$10, t,  \":\");
+                        printf \"%s %s %s %s\n\", p[2], b[2], f[2], t[2]; exit}" \
+                                < "${index_html}")
+        result_r_total=${total/\]}
+        result_r_passed=${passed}
+        result_r_failed=${failed}
+        result_r_disabled='-'
+        result_r_broken=${broken}
+    fi
+
+    return ${ec}
+}
+
+run_local_now() {
+    local -r run_tests="${bindir}/run-reg-tests.py"
+    local opts=("--run-local-now")
+    opts+=("--timestamp=${timestamp}")
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        opts+=("--no-gpl")
+    fi
+    if [[ "${do_generate_web_page}" == 'yes' ]]; then
+        opts+=("--only-generate-web-page")
+    fi
+
+    if [[ -n "${publish_dir}" ]]; then
+        opts+=("--publish-dir=${publish_dir}")
+    fi
+
+    python3 "${run_tests}" "${opts[@]}"
+    local -i ec=$?
+
+    [[ -n "${publish_dir}" ]] || return ${ec}
+
+    local -r results_xml="${publish_dir}/results_${timestamp}.xml"
+    local -r results_xslt="${publish_dir}/results.xslt"
+    if [[ -f "${results_xml}" && -f "${results_xslt}" ]]; then
+        xsltproc "${results_xslt}" "${results_xml}" > "${results_xml%.*}.html"
+    fi
 
     return ${ec}
 }
@@ -578,6 +690,23 @@ update_master_landing_page() {
 }
 
 main() {
+    if [[ "${do_run_local_now}" == 'yes' || \
+          "${do_regtests}" == 'yes' || \
+          "${do_generate_web_page}" == 'yes' || \
+          "${opt_force}" == 'yes' ]]; then
+        check_plot_dependencies
+    fi
+
+    if [[ "${do_run_local_now}" == 'yes' || \
+          ( "${do_generate_web_page}" == 'yes' && \
+            "${do_compile}" == 'no' && \
+            "${do_unittests}" == 'no' && \
+            "${do_regtests}" == 'no' && \
+            "${opt_force}" == 'no' ) ]]; then
+        run_local_now
+        return $?
+    fi
+
     # local variable for the opalx binary
     local -r opalxbin="${builddir}/src/opalx"
     

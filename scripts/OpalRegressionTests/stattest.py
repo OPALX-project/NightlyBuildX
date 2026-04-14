@@ -21,7 +21,7 @@ class StatTest:
         - name: name of the smb file to be checked
     """
 
-    def __init__(self, var, quant, eps, prefix, name, suffix = ".stat"):
+    def __init__(self, var, quant, eps, prefix, name, suffix = ".stat", use_gnuplot = True):
         self.var = var
         self.quant = quant
         self.eps = eps
@@ -29,6 +29,7 @@ class StatTest:
         self.name = name
         self.fname = os.path.join(self.prefix, self.name) + suffix
         self.reference_fname = os.path.join(self.prefix, "reference", self.name) + suffix
+        self.use_gnuplot = use_gnuplot
         
     def _report_broken_test(self, root):
         passed_report = TempXMLElement("state")
@@ -201,6 +202,7 @@ class StatTest:
         if self.var in header['columns']:
             varData = header['columns'][self.var]
             varCol = varData['column']
+            self.var_unit = varData['units']
         else:
             return []
         with open(fname,"r") as infile:
@@ -249,6 +251,11 @@ class StatTest:
         return revision
 
     def _plot(self):
+        if self.use_gnuplot:
+            return self._plot_gnuplot()
+        return self._plot_python()
+
+    def _plot_gnuplot(self):
         stat_plot_file = os.path.join(self.prefix, 'data1.dat')
         opalRevision = self._read_stat_file(self.fname, stat_plot_file)
         if not opalRevision:
@@ -264,21 +271,83 @@ class StatTest:
             prettyVar = varParts[0] + "(" + varParts[1] + ")"
 
         output_fname = os.path.join(self.prefix, self.name + "_" + self.var + ".png")
-        plotcmd = "set terminal pngcairo\n"
+        plotcmd = "set terminal png size 800,500 enhanced truecolor\n"
         plotcmd += "set output '" + output_fname + "'\n"
         plotcmd += "set title '" + self.name + "'\n"
         plotcmd += "set key below\n"
+        plotcmd += "set grid lw 3 dt 2 lc rgb "#bbbbbb" \n"
         plotcmd += "set ytics nomirror\n"
         plotcmd += "set y2tics\n"
-        plotcmd += "set ylabel '" + prettyVar + " [" + self.var_unit + "]' font 'Helvetica-Bold,20'\n"
-        plotcmd += "set y2label 'delta " + prettyVar + " [" + self.var_unit + "]' font 'Helvetica-Bold,20'\n"
-        plotcmd += "set xlabel 's [m]' font 'Helvetica-Bold,20'\n"
-        plotcmd += "plot '" +  stat_plot_file + "' u 1:2 w l lw 2 t '" + opalRevision + "', "
-        plotcmd += "'" + reference_plot_file + "' u 1:2 w l lw 2 t '" + refRevision + "', "
-        plotcmd += "\"< paste " + stat_plot_file + " " + reference_plot_file + "\" u 1:($2-$4) w l lw 2 axis x1y2 t 'difference'" + ";\n"
+        plotcmd += "set ylabel '" + prettyVar + " [" + self.var_unit + "]' font 'Arial,30'\n"
+        plotcmd += "set y2label 'delta " + prettyVar + " [" + self.var_unit + "]' font 'Arial,30'\n"
+        plotcmd += "set xlabel 's [m]' font 'Arial,30'\n"
+        plotcmd += "plot '" +  stat_plot_file + "' u 1:2 w l lw 4 t '" + opalRevision + "', "
+        plotcmd += "'" + reference_plot_file + "' u 1:2 w l lw 4 t '" + refRevision + "', "
+        plotcmd += "\"< paste " + stat_plot_file + " " + reference_plot_file + "\" u 1:($2-$4) w l lw 4 axis x1y2 t 'difference'" + ";\n"
         plot = subprocess.Popen(['gnuplot'], stdin=subprocess.PIPE)
         plot.communicate(bytes(plotcmd, "UTF-8"))
         os.remove(stat_plot_file)
         os.remove(reference_plot_file)
             
+        return output_fname
+
+    def _plot_python(self):
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ModuleNotFoundError:
+            raise RuntimeError(
+                "Python plotting requested (--no-gpl), but matplotlib is not installed."
+            )
+
+        output_fname = os.path.join(self.prefix, self.name + "_" + self.var + ".png")
+        pretty_var = self.var.replace("_", "(" ,1)
+        if "(" in pretty_var:
+            pretty_var += ")"
+        if pretty_var.startswith("emit"):
+            pretty_var = pretty_var.replace("emit", r"$\epsilon$", 1)
+
+        difference = [value - ref for value, ref in zip(self.values, self.ref_values)]
+
+        cm_to_inch = 1.0 / 2.54
+        plt.style.use("default")
+        plt.rcParams.update(
+            {
+                "font.size": 10,
+                "axes.titlesize": 10,
+                "axes.labelsize": 10,
+                "xtick.labelsize": 10,
+                "ytick.labelsize": 10,
+                "legend.fontsize": 10,
+            }
+        )
+        fig, ax1 = plt.subplots(figsize=(10.0 * cm_to_inch, 10.0 * cm_to_inch), dpi=200)
+        ax2 = ax1.twinx()
+
+        ax1.plot(self.path_length, self.values, linewidth=2.0, label=self.opalRevision)
+        ax1.plot(self.ref_path_length, self.ref_values, linewidth=2.0, label=self.refRevision)
+        ax2.plot(self.path_length, difference, linewidth=2.0, linestyle="--", color="tab:red", label="difference")
+
+        nonzero_difference = [abs(value) for value in difference if value != 0.0]
+        if nonzero_difference:
+            ax2.set_yscale("symlog", linthresh=min(nonzero_difference))
+
+        ax1.set_title(self.name)
+        ax1.set_xlabel("s [m]")
+        ax1.set_ylabel(f"{pretty_var} [{self.var_unit}]")
+        ax2.set_ylabel(rf"$\Delta$ {pretty_var} [{self.var_unit}]")
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
+
+        ax1.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
+
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=1)
+
+        fig.tight_layout()
+        fig.savefig(output_fname, bbox_inches="tight")
+        plt.close(fig)
+
         return output_fname

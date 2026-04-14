@@ -10,24 +10,36 @@ import shutil
 import pathlib
 import re
 import hashlib
+import socket
 
 from OpalRegressionTests.reporter import Reporter
 from OpalRegressionTests.reporter import TempXMLElement
 import OpalRegressionTests.stattest as stattest
 
 class OpalRegressionTests:
-    def __init__(self, base_dir, tests, opalx_args, publish_dir = None, timestamp = None):
+    def __init__(
+        self,
+        base_dir,
+        tests,
+        opalx_args,
+        publish_dir = None,
+        timestamp = None,
+        use_gnuplot = True,
+        generate_web_page = False,
+    ):
         self.base_dir = base_dir
         self.tests = tests
         self.opalx_args = opalx_args
         self.publish_dir = publish_dir
+        self.use_gnuplot = use_gnuplot
+        self.generate_web_page = generate_web_page
         self.totalNrPassed = 0
         self.totalNrTests = 0
         self.rundir = sys.path[0]
         self.today = datetime.datetime.today()
         self.timestamp = timestamp
 
-    def run(self):
+    def run(self, compare_only = False):
         rep = Reporter()
         rep.appendReport("Start Regression Test on %s \n" % self.today.isoformat())
         rep.appendReport("==========================================================\n")
@@ -43,9 +55,19 @@ class OpalRegressionTests:
                 shutil.rmtree(plot_dir)
 
         self._addDate(rep)
+        self._addRunMetadata(rep)
         for test in self.tests:
-            rt = RegressionTest(self.base_dir, test, self.opalx_args)
-            rt.run()
+            rt = RegressionTest(
+                self.base_dir,
+                test,
+                self.opalx_args,
+                self.use_gnuplot,
+                generate_web_page=self.generate_web_page,
+            )
+            if compare_only:
+                rt.compare_only()
+            else:
+                rt.run()
             self.totalNrTests += rt.totalNrTests
             self.totalNrPassed += rt.totalNrPassed
             rt.publish(plot_dir)
@@ -132,6 +154,37 @@ class OpalRegressionTests:
 
         rep.appendChild(revision_report)
 
+    def _addRunMetadata(self, rep):
+        metadata_report = TempXMLElement("RunMetadata")
+
+        backend = "unknown"
+        architecture = os.getenv("NIGHTLYBUILDX_ARCHITECTURE", "unknown")
+        architecture_lower = architecture.lower()
+        if "cuda" in architecture_lower:
+            backend = "CUDA"
+        elif "hip" in architecture_lower:
+            backend = "HIP"
+        elif "openmp" in architecture_lower or "omp" in architecture_lower:
+            backend = "OPENMP"
+        elif "serial" in architecture_lower:
+            backend = "SERIAL"
+
+        entries = {
+            "host": socket.gethostname(),
+            "architecture": architecture,
+            "backend": backend,
+            "mpi_ranks": os.getenv("NIGHTLYBUILDX_MPI_RANKS", "1"),
+            "omp_threads": os.getenv("OMP_NUM_THREADS", "1"),
+            "device": os.getenv("NIGHTLYBUILDX_DEVICE", "none"),
+        }
+
+        for key, value in entries.items():
+            item = TempXMLElement(key)
+            item.appendTextNode(str(value))
+            metadata_report.appendChild(item)
+
+        rep.appendChild(metadata_report)
+
     def _publish_results (self):
         rep = Reporter ()
 
@@ -176,10 +229,12 @@ class OpalRegressionTests:
 
 class RegressionTest:
 
-    def __init__(self, base_dir, simname, args):
+    def __init__(self, base_dir, simname, args, use_gnuplot = True, generate_web_page = False):
         self.dirname = os.path.join (base_dir, simname)
         self.simname = simname
         self.args = args
+        self.use_gnuplot = use_gnuplot
+        self.generate_web_page = generate_web_page
         self.jobnr = -1
         self.totalNrTests = 0
         self.totalNrPassed = 0
@@ -208,24 +263,28 @@ class RegressionTest:
         the simulation run
         """
         rep = Reporter()
+        cwd = os.getcwd()
         os.chdir(self.dirname)
         os.chdir("reference")
         allok = True
 
-        for suffix in  [".stat"]:
-            fname = self.simname + suffix
-            fname_md5 = fname + ".md5"
-            if not os.path.isfile(fname):
-                rep_string = "\t Reference file %s is missing!\n % (fname)"
-                allok = False
-            if os.path.islink(fname_md5):
-                continue
-            if not os.path.isfile(fname_md5):
-                rep_string = "\t Reference file %s is missing!\n % (fname_md5)"
-                allok = False
-                continue
-            chksum_ok =  self._reportReferenceFiles(fname_md5)
-            allok = allok and chksum_ok
+        try:
+            for suffix in  [".stat"]:
+                fname = self.simname + suffix
+                fname_md5 = fname + ".md5"
+                if not os.path.isfile(fname):
+                    rep_string = "\t Reference file %s is missing!\n % (fname)"
+                    allok = False
+                if os.path.islink(fname_md5):
+                    continue
+                if not os.path.isfile(fname_md5):
+                    rep_string = "\t Reference file %s is missing!\n % (fname_md5)"
+                    allok = False
+                    continue
+                chksum_ok =  self._reportReferenceFiles(fname_md5)
+                allok = allok and chksum_ok
+        finally:
+            os.chdir(cwd)
 
         return allok
 
@@ -303,7 +362,24 @@ class RegressionTest:
         if os.path.isfile (self.simname + "-RT.o"):
             shutil.copy (self.simname + "-RT.o", self.simname + ".out")
 
+        timing_plot = self._write_timing_overview()
+        self._process_results(rep, success, timing_plot)
+        if self.generate_web_page:
+            self._write_local_plot_summary()
+
+    def compare_only(self):
+        os.chdir(self.dirname)
+        self._validateReferenceFiles()
+
+        rep = Reporter()
+        rep.appendReport("Compare local regression test " + self.simname + "\n")
+
         success = self._validateOutputFiles()
+        timing_plot = self._write_timing_overview()
+        self._process_results(rep, success, timing_plot)
+        self._write_local_plot_summary()
+
+    def _process_results(self, rep, success, timing_plot = None):
         if success:
             rep.appendReport("Reference output files OK\n")
         else:
@@ -324,7 +400,6 @@ class RegressionTest:
             simulation_report.addAttribute("description", description)
 
             rep.appendChild(simulation_report)
-            # loop over all tests in rt file, first line is a comment, skip this line
             for i, test in enumerate(tests[1::]):
                 try:
                     test_root = TempXMLElement("Test")
@@ -344,20 +419,245 @@ class RegressionTest:
                          "%s\n\n") % (self.simname, i+2, test, exc_info[1])
                     )
         else:
-            # Fallback if .rt file is missing: report based on execution success only
             description = "No definition file (.rt) found"
             if not success:
                description += ". Test failed (execution error or output missing)."
             else:
                description += ". Test execution successful (no result validation)."
-            
+
             simulation_report.addAttribute("description", description)
             rep.appendChild(simulation_report)
-            
-            # Count this as one test
+
             self.totalNrTests += 1
             if success:
                 self.totalNrPassed += 1
+
+        if timing_plot:
+            timing_plot_report = TempXMLElement("timing_plot")
+            timing_plot_report.appendTextNode("{0}/" + os.path.basename(timing_plot))
+            simulation_report.appendChild(timing_plot_report)
+
+        return success
+
+    def _write_local_plot_summary(self):
+        plots = sorted(pathlib.Path(self.dirname).glob("*.png"))
+        if not plots:
+            return
+
+        summary_path = pathlib.Path(self.dirname) / "plot-summary.html"
+        items = []
+        for plot in plots:
+            items.append(
+                "    <figure>\n"
+                f"      <img src=\"{plot.name}\" alt=\"{plot.name}\">\n"
+                f"      <figcaption>{plot.name}</figcaption>\n"
+                "    </figure>"
+            )
+
+        html = (
+            "<!doctype html>\n"
+            "<html lang=\"en\">\n"
+            "<head>\n"
+            "  <meta charset=\"utf-8\">\n"
+            f"  <title>{self.simname} Plot Summary</title>\n"
+            "  <style>\n"
+            "    body { font-family: sans-serif; margin: 1.5rem; }\n"
+            "    .grid { display: grid; grid-template-columns: repeat(2, 10cm); gap: 1rem; }\n"
+            "    figure { margin: 0; width: 10cm; }\n"
+            "    img { width: 10cm; height: 10cm; object-fit: contain; border: 1px solid #ccc; }\n"
+            "    figcaption { margin-top: 0.4rem; font-size: 0.85rem; word-break: break-word; }\n"
+            "  </style>\n"
+            "</head>\n"
+            "<body>\n"
+            f"  <h1>{self.simname} Plot Summary</h1>\n"
+            "  <div class=\"grid\">\n"
+            + "\n".join(items)
+            + "\n  </div>\n"
+            "</body>\n"
+            "</html>\n"
+        )
+
+        summary_path.write_text(html, encoding="utf-8")
+
+    def _parse_timing_file(self, timing_path):
+        total_wall = None
+        timers = {}
+        in_detail_table = False
+
+        with open(timing_path, "r", encoding="utf-8") as stream:
+            for raw_line in stream:
+                line = raw_line.rstrip("\n")
+                stripped = line.strip()
+                if not stripped or stripped.startswith("="):
+                    continue
+
+                if stripped.startswith("ranks  Wall max"):
+                    in_detail_table = True
+                    continue
+
+                if not in_detail_table:
+                    match = re.match(r"^(.*?)\s+(\d+)\s+([0-9.eE+-]+)\s*$", stripped)
+                    if match and match.group(1).strip().strip(".") == "mainTimer":
+                        total_wall = float(match.group(3))
+                    continue
+
+                match = re.match(
+                    r"^(.*?)\s+(\d+)\s+([0-9.eE+-]+)\s+([0-9.eE+-]+)\s+([0-9.eE+-]+)\s*$",
+                    stripped,
+                )
+                if not match:
+                    continue
+
+                name = match.group(1).strip().strip(".")
+                timers[name] = {
+                    "ranks": int(match.group(2)),
+                    "max": float(match.group(3)),
+                    "min": float(match.group(4)),
+                    "avg": float(match.group(5)),
+                }
+
+        return total_wall, timers
+
+    def _classify_timer(self, name):
+        if name in {"Write Stat", "Write H5-File"}:
+            return "I/O"
+        if name in {"scatter", "gather", "fillHalo", "accumulateHalo"}:
+            return "communication"
+        if (
+            name.startswith("TIntegration")
+            or name in {"particleBC", "External field eval.", "updateParticle"}
+        ):
+            return "tracking/integration"
+        return "orchestration"
+
+    def _select_dominant_timers(self, total_wall, timers):
+        if not total_wall or total_wall <= 0.0:
+            return []
+
+        selected = []
+        cumulative = 0.0
+        for name, values in sorted(timers.items(), key=lambda item: item[1]["avg"], reverse=True):
+            if name == "mainTimer":
+                continue
+            selected.append((name, values))
+            cumulative += values["avg"]
+            if cumulative >= 0.8 * total_wall:
+                break
+        return selected
+
+    def _write_timing_overview(self):
+        timing_path = pathlib.Path(self.dirname) / "timing.dat"
+        reference_timing_path = pathlib.Path(self.dirname) / "reference" / "timing.dat"
+        if not timing_path.is_file() or not reference_timing_path.is_file():
+            return False
+
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            from matplotlib.patches import Patch
+        except ModuleNotFoundError:
+            return False
+
+        total_wall, timers = self._parse_timing_file(timing_path)
+        if not timers:
+            return False
+        timers.pop("mainTimer", None)
+
+        _, reference_timers = self._parse_timing_file(reference_timing_path)
+        reference_timers.pop("mainTimer", None)
+        selected = self._select_dominant_timers(total_wall, timers)
+        if not selected:
+            return False
+
+        color_map = {
+            "I/O": "#4C78A8",
+            "communication": "#F58518",
+            "tracking/integration": "#54A24B",
+            "orchestration": "#B279A2",
+        }
+
+        labels = []
+        averages = []
+        lower_errors = []
+        upper_errors = []
+        colors = []
+        delta_labels = []
+
+        for name, values in selected:
+            timer_class = self._classify_timer(name)
+            labels.append(name)
+            averages.append(values["avg"])
+            if values["ranks"] == 1:
+                lower_errors.append(0.0)
+                upper_errors.append(0.0)
+            else:
+                lower_errors.append(max(values["avg"] - values["min"], 0.0))
+                upper_errors.append(max(values["max"] - values["avg"], 0.0))
+            colors.append(color_map[timer_class])
+
+            ref_values = reference_timers.get(name)
+            if ref_values and ref_values["avg"] != 0.0:
+                delta_pct = 100.0 * (values["avg"] - ref_values["avg"]) / ref_values["avg"]
+                delta_labels.append(rf"$\Delta$ {delta_pct:+.1f}%")
+            else:
+                delta_labels.append("n/a")
+
+        cm_to_inch = 1.0 / 2.54
+        plt.style.use("default")
+        plt.rcParams.update(
+            {
+                "font.size": 10,
+                "axes.titlesize": 10,
+                "axes.labelsize": 10,
+                "xtick.labelsize": 9,
+                "ytick.labelsize": 10,
+                "legend.fontsize": 9,
+            }
+        )
+
+        fig, ax = plt.subplots(figsize=(20.0 * cm_to_inch, 20.0 * cm_to_inch), dpi=200)
+        xpos = list(range(len(labels)))
+        error = [lower_errors, upper_errors]
+        bars = ax.bar(
+            xpos,
+            averages,
+            yerr=error,
+            capsize=4,
+            color=colors,
+            edgecolor="black",
+            linewidth=0.8,
+        )
+
+        ymax = max(values["max"] for _, values in selected)
+        offset = 0.03 * ymax if ymax > 0 else 0.05
+        for bar, label, upper in zip(bars, delta_labels, upper_errors):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height() + upper + offset,
+                label,
+                ha="center",
+                va="bottom",
+                rotation=90,
+            )
+
+        ax.set_xticks(xpos)
+        ax.set_xticklabels(labels, rotation=90, ha="center", va="top")
+        ax.set_ylabel("Wall time [s]")
+        ax.set_title("Timing Overview (timers covering 80% of Wall)")
+        ax.grid(True, axis="y", linestyle="--", linewidth=0.7, alpha=0.5)
+
+        legend_handles = [
+            Patch(facecolor=color, edgecolor="black", label=timer_class)
+            for timer_class, color in color_map.items()
+        ]
+        ax.legend(handles=legend_handles, loc="upper right")
+
+        fig.tight_layout()
+        output_path = pathlib.Path(self.dirname) / f"{self.simname}_timing-overview.png"
+        fig.savefig(output_path, bbox_inches="tight")
+        plt.close(fig)
+        return str(output_path)
 
     def publish(self, plots_dir):
         if not plots_dir:
@@ -422,13 +722,14 @@ class RegressionTest:
 
         For smb tests the file name is <simname>-bunch-idBunch.smb
         """
+        test = test.split("#", 1)[0].rstrip()
         nameparams = str.split(test,"\"")
         var = nameparams[1]
-        params = str.split(nameparams[2].lstrip(), " ")
+        params = nameparams[2].split()
         rtest = 0
         if "stat" in test:
             rtest = stattest.StatTest(var, params[0], float(params[1]),
-                                      self.dirname, self.simname)
+                                      self.dirname, self.simname, use_gnuplot=self.use_gnuplot)
         else:
             return None
 
