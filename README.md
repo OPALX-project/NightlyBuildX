@@ -22,7 +22,8 @@ The core of this system is the `scripts/run_tests` bash script:
 3.  **Build**: Compiles OPALX.
 4.  **Test**: Runs regression tests.
 5.  **Report**: Generates HTML reports organized by architecture:
-    - **Master landing page**: Single overview showing all architectures at `overview/<branch>/index.html`
+    - **Branch selector**: Top-level overview at `overview/index.html`
+    - **Branch landing page**: Single overview showing all architectures at `overview/<branch>/index.html`
     - **Architecture-specific pages**: Detailed history per configuration
     - **Test results**: Individual test outputs and comparisons
 
@@ -77,10 +78,14 @@ Delete `gui/run-history.json` for a clean Results Browser history. Published XML
 
 *   `--config=FILE`: Specify a configuration file (e.g., from `scripts/config/`).
 *   `--publish-dir=DIR`: Directory to publish HTML results.
+*   `--branches-file=FILE`: Read OPALX branches to build and test. If `~/branches.txt` exists and `--opalx-branch` is not set, it is used automatically.
 *   `--force`, `-f`: Force compilation and running of all tests.
 *   `--compile`: Force compilation.
+*   `--no-clean-after-compile`: Keep object files after a successful compile. By default the build tree is cleaned after compilation to save storage while preserving the compiled executable and configured build tree.
 *   `--unit-tests`: Force running unit tests (runs `ctest -L unit` in the build directory; requires `OPALX_ENABLE_UNIT_TESTS=ON` in your config).
 *   `--reg-tests`: Force running regression tests.
+*   `--test`: Run only the `Spin-Tracking` regression test.
+*   `--test=NAME`: Run only one named regression test.
 
 ### Example
 
@@ -101,13 +106,14 @@ workspace/
   opalx/              # Single OPALX checkout; branches are selected with git checkout
   regression-tests-x/ # Single regression-tests checkout
   build/
-    <architecture>/   # Reused build directory for the selected OPALX branch/config
+    <architecture>/
+      build-<branch>/ # Reused build directory for the selected OPALX branch/config
 ```
 
 This structure allows:
 - **One OPALX clone** reused by checking out branches instead of cloning per branch
 - **One regression test clone** reused by checking out the selected tests branch
-- **Stable build directories** per architecture/config family
+- **Stable build directories** per architecture and OPALX branch
 
 ## Configuration
 
@@ -129,11 +135,24 @@ cmake_args+=("-DPLATFORMS=SERIAL")
 ```
 
 The architecture setting affects:
-*   Build directory layout: `workspace/build/<architecture>/`
+*   Build directory layout: `workspace/build/<architecture>/build-<branch>/`
 *   Published results structure: `<publish-dir>/<test-type>/<branch>/<architecture>/`
 *   HTML report titles to clearly identify which architecture was tested
 
-**Note**: Source code and tests use one shared checkout each. Switching branches happens with `git checkout`, and build directories are reused by architecture.
+**Note**: Source code and tests use one shared checkout each. Switching branches happens with `git checkout`, and build directories are reused by architecture and OPALX branch. Branch names are sanitized only for directory names, for example `feature/foo` becomes `feature_foo`.
+
+## Branch Lists
+
+`scripts/run_tests` reads `~/branches.txt` by default when `--opalx-branch` is not supplied. Each non-empty, non-comment line is treated as one OPALX branch:
+
+```text
+master
+feature/my-branch
+```
+
+For each branch, NightlyBuildX checks out the single managed OPALX source tree at `workspace/opalx`, builds in `workspace/build/<architecture>/build-<branch>/`, runs the requested tests, and publishes results under the branch-specific HTML tree.
+
+The local wrapper `~/bin/runOPALX-reg-test-local` continues to run a single branch because it passes `--opalx-branch`. Omit that option, or pass `--branches-file=~/branches.txt`, to run all branches from the file.
 
 ## Regression Tests
 The regression tests are located on the `cleanup` branch in the [regression-tests-x](https://github.com/OPALX-project/regression-tests-x/tree/cleanup) repository of the OPALX project.

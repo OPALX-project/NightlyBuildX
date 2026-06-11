@@ -132,20 +132,18 @@ def main(argv):
         os.makedirs(publish_dir)
 
     if not args.run_local_now:
-        try:
-            if args.opalx_exe_path:
-                os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
-            elif os.getenv("OPALX_EXE_PATH"):
-                args.opalx_exe_path = os.getenv("OPALX_EXE_PATH")
-            else:
-                args.opalx_exe_path = os.path.dirname(shutil.which("opalx"))
-                os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
+        if args.opalx_exe_path:
+            os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
+        elif os.getenv("OPALX_EXE_PATH"):
+            args.opalx_exe_path = os.getenv("OPALX_EXE_PATH")
+        else:
+            opalx_on_path = shutil.which("opalx")
+            args.opalx_exe_path = os.path.dirname(opalx_on_path) if opalx_on_path else ""
+            os.environ['OPALX_EXE_PATH'] = args.opalx_exe_path
 
-            opalx = os.path.join(args.opalx_exe_path, "opalx")
-            if not (os.path.isfile(opalx) and os.access(opalx, os.X_OK)):
-                raise FileNotFoundError
-        except:
-            print ("opalx - not found or not an executablet!")
+        opalx = os.path.join(args.opalx_exe_path, "opalx")
+        if not (os.path.isfile(opalx) and os.access(opalx, os.X_OK)):
+            print ("opalx - not found or not executable!")
             sys.exit(1)
 
     # Scan for the tests

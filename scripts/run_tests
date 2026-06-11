@@ -11,6 +11,7 @@ declare -ri	EC_ARG_ERROR=1
 declare -ri	EC_GIT_ERROR=10
 
 declare branch="master"
+declare branch_slug="master"
 declare regtests_branch="master"
 declare architecture="cpu-serial"
 
@@ -46,7 +47,9 @@ _exit() {
 	if [[ ${aborting} == 'yes' ]]; then
 		return ${ec}
 	fi
-	update_overview
+    if [[ "${overview_dirty}" == 'yes' ]]; then
+	    update_overview
+    fi
 }
 
 # if errorcode ($1) > 0, then redirect output to 
@@ -96,6 +99,12 @@ OPTIONS:
 	Override the OPALX branch to check out. If not set, the
 	configuration file default is used.
 
+--branches-file=FILE
+	Read OPALX branches to build and test from FILE. When this option
+	is not set, ${HOME}/branches.txt is used if it exists. Empty lines
+	and lines starting with '#' are ignored. --opalx-branch overrides
+	this batch mode.
+
 --opalx-exe-path=DIR
 	Use an existing OPALX executable directory instead of updating and
 	compiling the managed workspace checkout.
@@ -111,6 +120,11 @@ OPTIONS:
 --compile
 	Compile OPAL even nothing changed and a binary exists.
 
+--no-clean-after-compile
+	Keep object files after a successful compile. By default the build
+	tree is cleaned after compilation to save storage while preserving
+	the compiled executable and configured build tree.
+
 --unit-tests
 	Run unit-tests even OPAL has not been compiled.
 
@@ -120,6 +134,9 @@ OPTIONS:
 --reg-tests
 	Run regression-tests even OPAL has not been compiled and the
 	tests has not been changed.
+
+--test[=NAME]
+	Run one regression test only. Without NAME, run Spin-Tracking.
 
 --no-reg-tests
 	Do not run regression tests, overriding the configuration file default.
@@ -133,7 +150,7 @@ OPTIONS:
 	plots.
 
 --only-generate-web-page
-	Write a local `plot-summary.html` page in each regression test
+	Write a local plot-summary.html page in each regression test
 	directory after plot generation. If this is the only action flag,
 	run in local compare-only mode without update/build/run and also
 	generate the standard regression results HTML/XML page locally.
@@ -169,14 +186,19 @@ declare do_regtests='no'
 declare do_run_local_now='no'
 declare do_no_gpl='no'
 declare do_generate_web_page='no'
+declare clean_after_compile='yes'
 declare explicit_actions='no'
 
 # configuration file
 declare	opt_config_file="default-${branch}.conf"
 declare opt_opalx_branch=""
+declare opt_branches_file=""
+declare opt_branches_file_set='no'
 declare opt_regtests_branch=""
 declare opt_opalx_exe_path=""
 declare opt_opalx_build_dir=""
+declare opt_single_regtest=""
+declare managed_build_layout='yes'
 
 # tests to run, all if non passed as argument
 declare -a tests=()
@@ -215,6 +237,14 @@ while (( $# > 0 )); do
                 opt_opalx_branch="$2"; shift 1
             fi
             ;;
+        --branches-file|--branches-file=* )
+            opt_branches_file_set='yes'
+            if [[ $1 == *=* ]]; then
+                opt_branches_file="${1#*=}"
+            else
+                opt_branches_file="$2"; shift 1
+            fi
+            ;;
         --opalx-exe-path|--opalx-exe-path=* )
             if [[ $1 == *=* ]]; then
                 opt_opalx_exe_path="${1#*=}"
@@ -240,9 +270,21 @@ while (( $# > 0 )); do
             explicit_actions='yes'
 			do_compile='yes'
 			;;
+        --no-clean-after-compile )
+            clean_after_compile='no'
+            ;;
         --reg-tests )
             explicit_actions='yes'
             do_regtests='yes'
+            ;;
+        --test|--test=* )
+            explicit_actions='yes'
+            do_regtests='yes'
+            if [[ $1 == *=* ]]; then
+                opt_single_regtest="${1#*=}"
+            else
+                opt_single_regtest="Spin-Tracking"
+            fi
             ;;
         --no-reg-tests )
             explicit_actions='yes'
@@ -296,6 +338,10 @@ if [[ -n "${opt_regtests_branch}" ]]; then
     regtests_branch="${opt_regtests_branch}"
 fi
 
+if [[ -n "${opt_single_regtest}" ]]; then
+    tests=( "${opt_single_regtest}" )
+fi
+
 if [[ -n "${publish_dir}" ]]; then
     mkdir -p "${publish_dir}"
 fi
@@ -315,7 +361,7 @@ esac
 # ${PREFIX}/scripts					                        ${bindir}
 # ${PREFIX}/workspace					                    ${workspace}
 # ${PREFIX}/workspace/opalx				                    ${srcdir}
-# ${PREFIX}/workspace/build/${architecture}		            ${builddir}
+# ${PREFIX}/workspace/build/${architecture}/build-${branch_slug} ${builddir}
 # ${PREFIX}/workspace/regression-tests-x			            ${testsbase}
 # ${PREFIX}/workspace/regression-tests-x/RegressionTests	    ${testsdir}
 
@@ -330,10 +376,11 @@ declare -r bindir="${abs_scriptname%/*}"
 declare -r prefix="${bindir%/*}"
 declare -r workspace="${prefix}/workspace"
 declare -r srcdir="${workspace}/opalx"
-declare    builddir="${workspace}/build/${architecture}"
+declare    builddir=""
 declare    opalx_exe_path="${builddir}/src"
 declare -r testsbase="${workspace}/regression-tests-x"
 declare -r testsdir="${testsbase}/RegressionTests"
+declare    overview_dirty='no'
 
 # Result variables
 result_compile="-"
@@ -352,14 +399,97 @@ result_r_failed="-"
 result_r_disabled="-"
 result_r_broken="-"
 
-clone_repo() {
-	local -r repo_url="$1"
-	local -r dir="$2"
-	{
-		git clone "${repo_url}" "${dir}" || exit ${EC_GIT_ERROR}
-		cd "${dir}"
-		git checkout "${branch}" || exit ${EC_GIT_ERROR}
-	}
+sanitize_path_component() {
+    local value="$1"
+    value="${value//\//_}"
+    value="${value// /_}"
+    value="${value//[^A-Za-z0-9._-]/_}"
+    [[ -n "${value}" ]] || value="default"
+    printf "%s" "${value}"
+}
+
+escape_sed_replacement() {
+    printf "%s" "$1" | sed 's/[\/&]/\\&/g'
+}
+
+set_branch_context() {
+    branch_slug=$(sanitize_path_component "${branch}")
+    if [[ "${managed_build_layout}" == 'yes' ]]; then
+        builddir="${workspace}/build/${architecture}/build-${branch_slug}"
+        opalx_exe_path="${builddir}/src"
+    fi
+}
+
+reset_results() {
+    result_compile="-"
+    result_u_total="-"
+    result_u_passed="-"
+    result_u_failed="-"
+    result_u_disabled="-"
+    result_u_broken="-"
+    result_r_total="-"
+    result_r_passed="-"
+    result_r_failed="-"
+    result_r_disabled="-"
+    result_r_broken="-"
+}
+
+read_branches_file() {
+    local -r file="$1"
+    [[ -f "${file}" ]] || die ${EC_ARG_ERROR} "ERROR: branches file does not exist - ${file}"
+
+    local line
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -n "${line}" ]] || continue
+        branches+=( "${line}" )
+    done < "${file}"
+
+    (( ${#branches[@]} > 0 )) || die ${EC_ARG_ERROR} "ERROR: branches file is empty - ${file}"
+}
+
+restore_opalx_source_overrides() {
+    [[ "${PWD}" == "${srcdir}" ]] || return 0
+    [[ -f "src/PartBunch/FieldMirror.hpp" ]] || return 0
+
+    if ! git diff --quiet -- "src/PartBunch/FieldMirror.hpp"; then
+        git checkout -- "src/PartBunch/FieldMirror.hpp"
+        echo "Restored generated FieldMirror.hpp override before branch checkout."
+    fi
+}
+
+checkout_requested_ref() {
+    local -r _branch="$1"
+    local pr_number=""
+
+    git fetch --prune origin
+
+    if git show-ref --verify --quiet "refs/heads/${_branch}"; then
+        git checkout "${_branch}"
+        return 0
+    fi
+
+    if git show-ref --verify --quiet "refs/remotes/origin/${_branch}"; then
+        git checkout -B "${_branch}" "origin/${_branch}"
+        return 0
+    fi
+
+    if [[ "${_branch}" =~ ^pr([0-9]+)(-|$) ]]; then
+        pr_number="${BASH_REMATCH[1]}"
+        if git ls-remote --exit-code origin "refs/pull/${pr_number}/head" >/dev/null 2>&1; then
+            git fetch origin "refs/pull/${pr_number}/head:refs/heads/${_branch}"
+            git checkout "${_branch}"
+            return 0
+        fi
+    fi
+
+    die ${EC_GIT_ERROR} "ERROR: cannot resolve OPALX branch '${_branch}' in ${PWD}.
+Checked local branch '${_branch}', remote branch 'origin/${_branch}'$(
+        [[ -n "${pr_number}" ]] && printf ", and GitHub PR ref 'refs/pull/%s/head'" "${pr_number}"
+    ).
+Use a branch name that exists on origin, or for PR branches use a name like pr501-description only when refs/pull/501/head exists on the OPALX remote."
 }
 
 update_repo() {
@@ -377,7 +507,7 @@ update_repo() {
 	if [[ ! -d "${_dir}" ]]; then
 		git clone "${_url}" "${_dir}"
 		cd "${_dir}"
-		git checkout "${_branch}"
+        checkout_requested_ref "${_branch}"
         [[ -x gen_OPALrevision || -f gen_OPALrevision ]] && bash gen_OPALrevision
 		return 0
         # Otherwise merge the changes 
@@ -385,10 +515,16 @@ update_repo() {
 		cd "${_dir}"
 		git rev-parse --is-inside-work-tree 1>/dev/null 2>&1 || \
 			die ${EC_GIT_ERROR} "${_dir}: is not a Git working directory!"
+        restore_opalx_source_overrides
         local current_branch
         current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
-		git checkout "${_branch}"
-		git fetch
+		checkout_requested_ref "${_branch}"
+
+        if ! git show-ref --verify --quiet "refs/remotes/origin/${_branch}"; then
+            echo "No remote branch origin/${_branch}; using checked-out local branch '${_branch}'."
+            [[ -x gen_OPALrevision || -f gen_OPALrevision ]] && bash gen_OPALrevision
+            return 0
+        fi
 
 		local -i num_changed_files=$(git diff --name-only  "origin/${_branch}"  | wc -l | awk '{print $1}')
 		if (( $num_changed_files == 0 )); then
@@ -410,6 +546,26 @@ compile_opalx() {
 	cmake "${cmake_args[@]}" "${srcdir}"
 	time make -j8
     result_compile='ok'
+    if [[ "${clean_after_compile}" == 'yes' ]]; then
+        printf "\nCleaning build object files after successful compile\n"
+        cmake --build . --target clean
+    fi
+}
+
+apply_opalx_source_overrides() {
+    local -r patch_file="${bindir}/patches/FieldMirror.hpp"
+    local -r target_file="${srcdir}/src/PartBunch/FieldMirror.hpp"
+
+    [[ -f "${patch_file}" ]] || return 1
+    [[ -f "${target_file}" ]] || return 1
+
+    if ! cmp -s "${patch_file}" "${target_file}"; then
+        cp "${patch_file}" "${target_file}"
+        echo "Copied patched FieldMirror.hpp for latest IPPL compatibility."
+        return 0
+    fi
+
+    return 1
 }
 
 check_plot_dependencies() {
@@ -431,7 +587,7 @@ run_regressiontests() {
 
     # Create publishing directory
     if [[ -n "${publish_dir}" ]]; then
-        local -r publish_regtests_dir="${publish_dir}/regressionTests/${branch}/${architecture}"
+        local -r publish_regtests_dir="${publish_dir}/regressionTests/${branch_slug}/${architecture}"
         mkdir -p "${publish_regtests_dir}"
         opts+=("--publish-dir=${publish_regtests_dir}")
     fi
@@ -519,29 +675,35 @@ run_local_now() {
 }
 
 run_unittests() {
-    # Match NightlyBuildX: only run unit tests when publish directory is set.
-    [[ -n "${publish_dir}" ]] || return 0
-
     result_u_total='-'
     result_u_passed='-'
     result_u_failed='-'
     result_u_disabled='-'
     result_u_broken='-'
 
-    local -r unit_dir="${publish_dir}/unitTests/${branch}/${architecture}"
-    mkdir -p "${unit_dir}"
-    local -r results_txt="${unit_dir}/results_${timestamp}.txt"
+    local results_txt=''
+    if [[ -n "${publish_dir}" ]]; then
+        local -r unit_dir="${publish_dir}/unitTests/${branch_slug}/${architecture}"
+        mkdir -p "${unit_dir}"
+        results_txt="${unit_dir}/results_${timestamp}.txt"
+    fi
 
     [[ -d "${builddir}" ]] || return 0
     [[ -f "${builddir}/CTestTestfile.cmake" ]] || return 0
 
     cd "${builddir}"
-    # Run CTest (all tests, same as NightlyBuildX) and capture output; exit code from ctest.
-    ctest --output-on-failure "${unittests_args[@]}" | tee "${results_txt}"
-    local -i ec=${PIPESTATUS[0]}
+    # Run labeled unit tests and capture output; exit code from ctest.
+    local -i ec
+    if [[ -n "${results_txt}" ]]; then
+        ctest -L unit --output-on-failure "${unittests_args[@]}" | tee "${results_txt}"
+        ec=${PIPESTATUS[0]}
+    else
+        ctest -L unit --output-on-failure "${unittests_args[@]}"
+        ec=$?
+    fi
 
     # Parse summary line, e.g. "100% tests passed, 0 tests failed out of 10"
-    if [[ -s "${results_txt}" ]]; then
+    if [[ -n "${results_txt}" && -s "${results_txt}" ]]; then
         local summary
         summary=$(grep -E "tests failed out of" "${results_txt}" | tail -n 1 || true)
         if [[ -n "${summary}" ]]; then
@@ -569,7 +731,7 @@ update_overview() {
     [[ "${result_compile}${result_u_total}${result_r_total}" == '---' ]] && return 0
 
     # Create overview directory - separate from test results
-    local -r overview_dir="${publish_dir}/overview/${branch}/${architecture}"
+    local -r overview_dir="${publish_dir}/overview/${branch_slug}/${architecture}"
     mkdir -p "${overview_dir}"
 
     # org file with the table we have to update
@@ -589,8 +751,11 @@ update_overview() {
     fi
 
     # Regenerate the full file from template with substitutions
-    sed -e "s/@BRANCH@/${branch}/g" \
-        -e "s/@ARCHITECTURE@/${architecture}/g" \
+    local branch_escaped architecture_escaped
+    branch_escaped=$(escape_sed_replacement "${branch}")
+    architecture_escaped=$(escape_sed_replacement "${architecture}")
+    sed -e "s/@BRANCH@/${branch_escaped}/g" \
+        -e "s/@ARCHITECTURE@/${architecture_escaped}/g" \
         "${bindir}/html/index.org" > "${index_org}"
     
     # Remove the template's empty table and append the actual table data
@@ -604,13 +769,13 @@ update_overview() {
 
     # links to generated XML pages used in the table
     # Adjusted relative paths from overview directory
-    local -r u_results_html="../../../unitTests/${branch}/${architecture}/results_${timestamp}.txt"
-    local -r r_results_html="../../../regressionTests/${branch}/${architecture}/results_${timestamp}.html"
+    local -r u_results_html="../../../unitTests/${branch_slug}/${architecture}/results_${timestamp}.txt"
+    local -r r_results_html="../../../regressionTests/${branch_slug}/${architecture}/results_${timestamp}.html"
 
     local time_col
-    local ofile="${publish_dir}/output/${branch}/${architecture}/${timestamp}.txt"
+    local ofile="${publish_dir}/output/${branch_slug}/${architecture}/${timestamp}.txt"
     if [[ -e "${ofile}" ]]; then
-        time_col="[[../../../output/${branch}/${architecture}/${timestamp}.txt][${today} ${time/-/:}]]"
+        time_col="[[../../../output/${branch_slug}/${architecture}/${timestamp}.txt][${today} ${time/-/:}]]"
     else
         time_col="${today} ${time/-/:}"
     fi
@@ -644,7 +809,6 @@ update_overview() {
     line+="| ${u_report} "
     line+="| ${r_report} "
     line+="|"
-    local -r tmpfile2=$(mktemp "/tmp/awk.XXXXXX")
     awk "{print}; /^\|-/ {print \"${line}\"}" \
         "${index_org}" > "${tmpfile}"
     mv "${tmpfile}" "${index_org}"
@@ -672,31 +836,36 @@ update_overview() {
     
     # Update master landing page with all architectures
     update_master_landing_page
+    update_branch_selector_page
+    overview_dirty='no'
 }
 
 update_master_landing_page() {
     # Master landing page location
-    local -r master_dir="${publish_dir}/overview/${branch}"
+    local -r master_dir="${publish_dir}/overview/${branch_slug}"
     local -r master_org="${master_dir}/index.org"
     local -r master_html="${master_dir}/index.html"
     
     mkdir -p "${master_dir}"
+    printf "%s\n" "${branch}" > "${master_dir}/branch-name.txt"
     
     # Find all architecture directories under this branch
     local -a architectures=()
-    if [[ -d "${publish_dir}/overview/${branch}" ]]; then
+    if [[ -d "${publish_dir}/overview/${branch_slug}" ]]; then
         while IFS= read -r arch_dir; do
             local arch_name=$(basename "${arch_dir}")
             # Skip files, only process directories
             [[ -d "${arch_dir}" ]] && [[ -f "${arch_dir}/index.html" ]] && architectures+=("${arch_name}")
-        done < <(find "${publish_dir}/overview/${branch}" -maxdepth 1 -type d ! -path "${publish_dir}/overview/${branch}")
+        done < <(find "${publish_dir}/overview/${branch_slug}" -maxdepth 1 -type d ! -path "${publish_dir}/overview/${branch_slug}")
     fi
     
     # Build the master page from template
     local -r tmpfile=$(mktemp "/tmp/master-landing.XXXXXX")
+    local branch_escaped
+    branch_escaped=$(escape_sed_replacement "${branch}")
     
     # Copy template and substitute @BRANCH@, stop at placeholder
-    sed "s/@BRANCH@/${branch}/g" "${bindir}/html/master-index.org" | \
+    sed "s/@BRANCH@/${branch_escaped}/g" "${bindir}/html/master-index.org" | \
         awk '/ARCHITECTURE_LINKS will be inserted here/ {exit} {print}' > "${tmpfile}"
     
     # Add links for each architecture
@@ -735,7 +904,160 @@ update_master_landing_page() {
         -s -o "${master_html}" "${master_org}"
 }
 
-main() {
+trim_text() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf "%s" "${value}"
+}
+
+latest_overview_row() {
+    local -r index_org="$1"
+    [[ -f "${index_org}" ]] || return 1
+    awk '/^\| [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {print; exit}' "${index_org}"
+}
+
+test_status_class() {
+    local report="$1"
+    report=$(trim_text "${report}")
+
+    if [[ -z "${report}" || "${report}" == "-" ]]; then
+        printf "skip"
+    elif [[ "${report}" == *"failed:0"* && ( "${report}" == *"broken:0"* || "${report}" == *"broken:-"* ) ]]; then
+        printf "ok"
+    else
+        printf "nok"
+    fi
+}
+
+test_status_label() {
+    local -r status_value="$1"
+    case "${status_value}" in
+        ok) printf "ok" ;;
+        nok) printf "nok" ;;
+        *) printf "-" ;;
+    esac
+}
+
+branch_architecture_checks_html() {
+    local -r overview_dir="$1"
+    local -r branch_name="$2"
+    local -a arch_dirs=()
+    local arch_dir arch_name index_org row
+    local _ date_col build_col unit_col regression_col __
+    local unit_status regression_status unit_label regression_label
+
+    while IFS= read -r arch_dir; do
+        [[ -f "${arch_dir}/index.org" ]] && arch_dirs+=( "${arch_dir}" )
+    done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
+
+    for arch_dir in "${arch_dirs[@]}"; do
+        arch_name=$(basename "${arch_dir}")
+        index_org="${arch_dir}/index.org"
+        row=$(latest_overview_row "${index_org}" || true)
+
+        if [[ -n "${row}" ]]; then
+            IFS='|' read -r _ date_col build_col unit_col regression_col __ <<< "${row}"
+            unit_status=$(test_status_class "${unit_col}")
+            regression_status=$(test_status_class "${regression_col}")
+        else
+            date_col="-"
+            unit_status="skip"
+            regression_status="skip"
+        fi
+
+        unit_label=$(test_status_label "${unit_status}")
+        regression_label=$(test_status_label "${regression_status}")
+        date_col=$(trim_text "${date_col}")
+
+        printf '        <div class="arch-line"><a href="%s/%s/index.html">%s</a><span class="badge %s"><span class="dot"></span>Unit %s</span><span class="badge %s"><span class="dot"></span>Reg %s</span><span class="run-date">%s</span></div>\n' \
+            "${branch_name}" "${arch_name}" "${arch_name}" \
+            "${unit_status}" "${unit_label}" \
+            "${regression_status}" "${regression_label}" \
+            "${date_col}"
+    done
+}
+
+update_branch_selector_page() {
+    [[ -n "${publish_dir}" ]] || return 0
+
+    local -r overview_dir="${publish_dir}/overview"
+    local -r selector_html="${overview_dir}/index.html"
+    mkdir -p "${overview_dir}"
+
+    local -a branch_dirs=()
+    while IFS= read -r branch_dir; do
+        [[ -f "${branch_dir}/index.html" ]] && branch_dirs+=( "$(basename "${branch_dir}")" )
+    done < <(find "${overview_dir}" -maxdepth 1 -type d ! -path "${overview_dir}" | sort)
+
+    {
+        printf '%s\n' \
+            '<!doctype html>' \
+            '<html lang="en">' \
+            '<head>' \
+            '  <meta charset="utf-8">' \
+            '  <title>OPALX Regression Test Branches</title>' \
+            '  <style>' \
+            '    body { font-family: system-ui, sans-serif; margin: 2rem; color: #20242a; }' \
+            '    main { max-width: 72rem; }' \
+            '    h1 { margin-top: 0; border-bottom: 3px solid #2c5aa0; padding-bottom: 0.5rem; }' \
+            '    label { display: block; font-weight: 600; margin: 1.5rem 0 0.4rem; }' \
+            '    select { min-width: 18rem; padding: 0.45rem; font: inherit; }' \
+            '    table { border-collapse: collapse; width: 100%; margin-top: 1.5rem; }' \
+            '    th, td { border-bottom: 1px solid #d8dde5; padding: 0.55rem; text-align: left; }' \
+            '    a { color: #1d4f91; }' \
+            '    .branch { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }' \
+            '    .arch-checks { margin-top: 0.45rem; display: grid; gap: 0.35rem; }' \
+            '    .arch-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }' \
+            '    .badge { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid #ccd3dd; border-radius: 0.25rem; padding: 0.12rem 0.35rem; font-size: 0.82rem; }' \
+            '    .dot { width: 0.65rem; height: 0.65rem; border-radius: 50%; display: inline-block; background: #9aa3af; }' \
+            '    .ok .dot { background: #15803d; }' \
+            '    .nok .dot { background: #b91c1c; }' \
+            '    .skip .dot { background: #9aa3af; }' \
+            '    .run-date { color: #667085; font-size: 0.82rem; }' \
+            '  </style>' \
+            '</head>' \
+            '<body>' \
+            '<main>' \
+            '  <h1>OPALX Regression Test Branches</h1>' \
+            '  <label for="branchSelect">Branch</label>' \
+            '  <select id="branchSelect" onchange="if (this.value) window.location.href = this.value;">' \
+            '    <option value="">Select a branch...</option>'
+        local branch_name branch_label label_file
+        for branch_name in "${branch_dirs[@]}"; do
+            label_file="${overview_dir}/${branch_name}/branch-name.txt"
+            branch_label="${branch_name}"
+            [[ -f "${label_file}" ]] && branch_label=$(<"${label_file}")
+            printf '    <option value="%s/index.html">%s</option>\n' "${branch_name}" "${branch_label}"
+        done
+        printf '%s\n' \
+            '  </select>' \
+            '  <table>' \
+            '    <thead><tr><th>Branch</th><th>Results</th></tr></thead>' \
+            '    <tbody>'
+        for branch_name in "${branch_dirs[@]}"; do
+            label_file="${overview_dir}/${branch_name}/branch-name.txt"
+            branch_label="${branch_name}"
+            [[ -f "${label_file}" ]] && branch_label=$(<"${label_file}")
+            printf '      <tr><td class="branch">%s</td><td><a href="%s/index.html">Open results</a><div class="arch-checks">\n' "${branch_label}" "${branch_name}"
+            branch_architecture_checks_html "${overview_dir}" "${branch_name}"
+            printf '      </div></td></tr>\n'
+        done
+        printf '%s\n' \
+            '    </tbody>' \
+            '  </table>' \
+            '</main>' \
+            '</body>' \
+            '</html>'
+    } > "${selector_html}"
+}
+
+run_current_branch() {
+    set_branch_context
+    reset_results
+
+    printf "\n== OPALX branch: %s ==\n" "${branch}"
+
     if [[ "${do_run_local_now}" == 'yes' || \
           "${do_regtests}" == 'yes' || \
           "${do_generate_web_page}" == 'yes' || \
@@ -754,6 +1076,7 @@ main() {
     fi
 
     if [[ -n "${opt_opalx_build_dir}" ]]; then
+        managed_build_layout='no'
         builddir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${opt_opalx_build_dir}")
         if [[ -z "${opt_opalx_exe_path}" ]]; then
             opt_opalx_exe_path="${builddir}/src"
@@ -783,12 +1106,16 @@ main() {
     
         # Getting latest repo version
         printf "\nUpdating OPALX source repository... \n"
-	    update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+	    if update_repo "${srcdir}" "${branch}" "${src_repo_url}"; then
+            do_compile='yes'
+        fi
+        apply_opalx_source_overrides && do_compile='yes' || true
 
         # If the binary does not exist we need to compile
         [[ -e ${opalxbin} ]] || do_compile='yes'
     fi
 	aborting='no'
+    overview_dirty='yes'
  
     # Compilation
 	if [[ "${do_compile}" == "yes" ]]; then
@@ -817,6 +1144,34 @@ main() {
         run_regressiontests || return 1
     fi
 
+    update_overview
+}
+
+main() {
+    local -a branches=()
+    local default_branches_file="${HOME}/branches.txt"
+    if [[ "${opt_branches_file_set}" == 'yes' ]]; then
+        read_branches_file "${opt_branches_file}"
+    elif [[ -z "${opt_opalx_branch}" && -f "${default_branches_file}" ]]; then
+        read_branches_file "${default_branches_file}"
+    else
+        branches=( "${branch}" )
+    fi
+
+    local initial_do_compile="${do_compile}"
+    local initial_do_unittests="${do_unittests}"
+    local initial_do_regtests="${do_regtests}"
+    local initial_managed_build_layout="${managed_build_layout}"
+
+    local selected_branch
+    for selected_branch in "${branches[@]}"; do
+        branch="${selected_branch}"
+        do_compile="${initial_do_compile}"
+        do_unittests="${initial_do_unittests}"
+        do_regtests="${initial_do_regtests}"
+        managed_build_layout="${initial_managed_build_layout}"
+        run_current_branch
+    done
 }
 
 main

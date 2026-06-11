@@ -684,15 +684,24 @@ class RegressionTest:
                 print (err.decode ('utf-8'))
                 f.write (out)
                 f.write (err)
+                if proc.returncode != 0:
+                    msg = "%s exited with code %d" % (cmd, proc.returncode)
+                    print(msg)
+                    rep.appendReport(msg + "\n")
+                    return False
             except subprocess.TimeoutExpired:
+                proc.kill()
+                out, err = proc.communicate()
+                f.write(out)
+                f.write(err)
                 msg = "%s timed out!!!" % (cmd)
                 print(msg)
-                rep.appendReport(msg)
+                rep.appendReport(msg + "\n")
                 return False
-            except subprocess.CalledProcessError as e:
-                msg = "%s exited with code %d" % (cmd, e.returncode)
+            except OSError as exc:
+                msg = "%s could not be started: %s" % (cmd, exc)
                 print(msg)
-                rep.appendReport(msg)
+                rep.appendReport(msg + "\n")
                 return False
 
         return True
