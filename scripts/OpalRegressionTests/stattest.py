@@ -255,6 +255,11 @@ class StatTest:
             return self._plot_gnuplot()
         return self._plot_python()
 
+    def _plot_scale(self, unit):
+        if unit == "m":
+            return 1000.0, "mm"
+        return 1.0, unit
+
     def _plot_gnuplot(self):
         stat_plot_file = os.path.join(self.prefix, 'data1.dat')
         opalRevision = self._read_stat_file(self.fname, stat_plot_file)
@@ -271,19 +276,30 @@ class StatTest:
             prettyVar = varParts[0] + "(" + varParts[1] + ")"
 
         output_fname = os.path.join(self.prefix, self.name + "_" + self.var + ".png")
-        plotcmd = "set terminal png size 800,500 enhanced truecolor\n"
+        y_scale, y_unit = self._plot_scale(self.var_unit)
+        x_scale, x_unit = self._plot_scale("m")
+        x_expr = "($1*%s)" % x_scale
+        y_expr = "($2*%s)" % y_scale
+        diff_expr = "(($2-$4)*%s)" % y_scale
+
+        plotcmd = "set terminal png size 800,800 enhanced truecolor\n"
         plotcmd += "set output '" + output_fname + "'\n"
         plotcmd += "set title '" + self.name + "'\n"
         plotcmd += "set key below\n"
         plotcmd += "set grid lw 3 dt 2 lc rgb "#bbbbbb" \n"
         plotcmd += "set ytics nomirror\n"
         plotcmd += "set y2tics\n"
-        plotcmd += "set ylabel '" + prettyVar + " [" + self.var_unit + "]' font 'Arial,30'\n"
-        plotcmd += "set y2label 'delta " + prettyVar + " [" + self.var_unit + "]' font 'Arial,30'\n"
-        plotcmd += "set xlabel 's [m]' font 'Arial,30'\n"
-        plotcmd += "plot '" +  stat_plot_file + "' u 1:2 w l lw 4 t '" + opalRevision + "', "
-        plotcmd += "'" + reference_plot_file + "' u 1:2 w l lw 4 t '" + refRevision + "', "
-        plotcmd += "\"< paste " + stat_plot_file + " " + reference_plot_file + "\" u 1:($2-$4) w l lw 4 axis x1y2 t 'difference'" + ";\n"
+        plotcmd += "set format x '%.2f'\n"
+        if y_unit == "mm":
+            plotcmd += "set format y '%.2f'\n"
+        plotcmd += "set format y2 '%.2e'\n"
+        plotcmd += "set ylabel '" + prettyVar + " [" + y_unit + "]' font 'Arial,30'\n"
+        plotcmd += "set y2label 'delta " + prettyVar + " [" + y_unit + "]' font 'Arial,30' tc rgb '#2563eb'\n"
+        plotcmd += "set y2tics tc rgb '#2563eb'\n"
+        plotcmd += "set xlabel 's [" + x_unit + "]' font 'Arial,30'\n"
+        plotcmd += "plot '" +  stat_plot_file + "' u " + x_expr + ":" + y_expr + " w l lw 4 t '" + opalRevision + "', "
+        plotcmd += "'" + reference_plot_file + "' u " + x_expr + ":" + y_expr + " w l lw 4 t '" + refRevision + "', "
+        plotcmd += "\"< paste " + stat_plot_file + " " + reference_plot_file + "\" u " + x_expr + ":" + diff_expr + " w l lw 3.5 lc rgb '#2563eb' axis x1y2 t 'difference'" + ";\n"
         plot = subprocess.Popen(['gnuplot'], stdin=subprocess.PIPE)
         plot.communicate(bytes(plotcmd, "UTF-8"))
         os.remove(stat_plot_file)
@@ -296,6 +312,7 @@ class StatTest:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
+            from matplotlib.ticker import MaxNLocator
         except ModuleNotFoundError:
             raise RuntimeError(
                 "Python plotting requested (--no-gpl), but matplotlib is not installed."
@@ -308,7 +325,13 @@ class StatTest:
         if pretty_var.startswith("emit"):
             pretty_var = pretty_var.replace("emit", r"$\epsilon$", 1)
 
-        difference = [value - ref for value, ref in zip(self.values, self.ref_values)]
+        x_scale, x_unit = self._plot_scale("m")
+        y_scale, y_unit = self._plot_scale(self.var_unit)
+        path_length = [value * x_scale for value in self.path_length]
+        ref_path_length = [value * x_scale for value in self.ref_path_length]
+        values = [value * y_scale for value in self.values]
+        ref_values = [value * y_scale for value in self.ref_values]
+        difference = [value - ref for value, ref in zip(values, ref_values)]
 
         cm_to_inch = 1.0 / 2.54
         plt.style.use("default")
@@ -325,20 +348,27 @@ class StatTest:
         fig, ax1 = plt.subplots(figsize=(10.0 * cm_to_inch, 10.0 * cm_to_inch), dpi=200)
         ax2 = ax1.twinx()
 
-        ax1.plot(self.path_length, self.values, linewidth=2.0, label=self.opalRevision)
-        ax1.plot(self.ref_path_length, self.ref_values, linewidth=2.0, label=self.refRevision)
-        ax2.plot(self.path_length, difference, linewidth=2.0, linestyle="--", color="tab:red", label="difference")
+        ax1.plot(path_length, values, linewidth=2.0, label=self.opalRevision)
+        ax1.plot(ref_path_length, ref_values, linewidth=2.0, label=self.refRevision)
+        ax2.plot(path_length, difference, linewidth=1.5, linestyle="--", color="tab:blue", label="difference")
 
-        nonzero_difference = [abs(value) for value in difference if value != 0.0]
-        if nonzero_difference:
-            ax2.set_yscale("symlog", linthresh=min(nonzero_difference))
+        max_abs_difference = max([abs(value) for value in difference], default=0.0)
+        if max_abs_difference:
+            ax2.set_ylim(-1.08 * max_abs_difference, 1.08 * max_abs_difference)
 
         ax1.set_title(self.name)
-        ax1.set_xlabel("s [m]")
-        ax1.set_ylabel(f"{pretty_var} [{self.var_unit}]")
-        ax2.set_ylabel(rf"$\Delta$ {pretty_var} [{self.var_unit}]")
-        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
-        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
+        ax1.set_xlabel(f"s [{x_unit}]")
+        ax1.set_ylabel(f"{pretty_var} [{y_unit}]")
+        ax2.set_ylabel(rf"$\Delta$ {pretty_var} [{y_unit}]")
+        ax2.yaxis.label.set_color("tab:blue")
+        ax2.tick_params(axis="y", colors="tab:blue")
+        ax1.xaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.2f}"))
+        if y_unit == "mm":
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.2f}"))
+        else:
+            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
+        ax2.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3, prune=None))
+        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.2e}"))
 
         ax1.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
 
@@ -347,7 +377,7 @@ class StatTest:
         ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=1)
 
         fig.tight_layout()
-        fig.savefig(output_fname, bbox_inches="tight")
+        fig.savefig(output_fname)
         plt.close(fig)
 
         return output_fname

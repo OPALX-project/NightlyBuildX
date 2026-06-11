@@ -96,6 +96,14 @@ OPTIONS:
 	Override the OPALX branch to check out. If not set, the
 	configuration file default is used.
 
+--opalx-exe-path=DIR
+	Use an existing OPALX executable directory instead of updating and
+	compiling the managed workspace checkout.
+
+--opalx-build-dir=DIR
+	Use an existing OPALX build directory for unit tests and derive the
+	executable from DIR/src/opalx unless --opalx-exe-path is also set.
+
 --regtests-branch=BRANCH
 	Override the regression-tests branch to check out. If not set,
 	the configuration file default is used.
@@ -106,9 +114,15 @@ OPTIONS:
 --unit-tests
 	Run unit-tests even OPAL has not been compiled.
 
+--no-unit-tests
+	Do not run unit tests, overriding the configuration file default.
+
 --reg-tests
 	Run regression-tests even OPAL has not been compiled and the
 	tests has not been changed.
+
+--no-reg-tests
+	Do not run regression tests, overriding the configuration file default.
 
 --run-local-now
 	Skip update/build/run and only generate comparison plots for the
@@ -155,11 +169,14 @@ declare do_regtests='no'
 declare do_run_local_now='no'
 declare do_no_gpl='no'
 declare do_generate_web_page='no'
+declare explicit_actions='no'
 
 # configuration file
 declare	opt_config_file="default-${branch}.conf"
 declare opt_opalx_branch=""
 declare opt_regtests_branch=""
+declare opt_opalx_exe_path=""
+declare opt_opalx_build_dir=""
 
 # tests to run, all if non passed as argument
 declare -a tests=()
@@ -198,6 +215,20 @@ while (( $# > 0 )); do
                 opt_opalx_branch="$2"; shift 1
             fi
             ;;
+        --opalx-exe-path|--opalx-exe-path=* )
+            if [[ $1 == *=* ]]; then
+                opt_opalx_exe_path="${1#*=}"
+            else
+                opt_opalx_exe_path="$2"; shift 1
+            fi
+            ;;
+        --opalx-build-dir|--opalx-build-dir=* )
+            if [[ $1 == *=* ]]; then
+                opt_opalx_build_dir="${1#*=}"
+            else
+                opt_opalx_build_dir="$2"; shift 1
+            fi
+            ;;
         --regtests-branch|--regtests-branch=* )
             if [[ $1 == *=* ]]; then
                 opt_regtests_branch="${1#*=}"
@@ -206,24 +237,38 @@ while (( $# > 0 )); do
             fi
             ;;
 		--compile )
+            explicit_actions='yes'
 			do_compile='yes'
 			;;
         --reg-tests )
+            explicit_actions='yes'
             do_regtests='yes'
             ;;
+        --no-reg-tests )
+            explicit_actions='yes'
+            do_regtests='no'
+            ;;
         --run-local-now )
+            explicit_actions='yes'
             do_run_local_now='yes'
             ;;
         --no-gpl )
             do_no_gpl='yes'
             ;;
         --only-generate-web-page )
+            explicit_actions='yes'
             do_generate_web_page='yes'
             ;;
         --unit-tests )
+            explicit_actions='yes'
             do_unittests='yes'
 			;;
+        --no-unit-tests )
+            explicit_actions='yes'
+            do_unittests='no'
+			;;
 		-f | --force )
+            explicit_actions='yes'
 		    opt_force='yes'
 			do_compile='yes'
             do_regtests='yes'
@@ -269,11 +314,10 @@ esac
 #
 # ${PREFIX}/scripts					                        ${bindir}
 # ${PREFIX}/workspace					                    ${workspace}
-# ${PREFIX}/workspace/${branch}				                ${branchdir}
-# ${PREFIX}/workspace/${branch}/src			                ${srcdir}
-# ${PREFIX}/workspace/${branch}/${architecture}/build		${builddir}
-# ${PREFIX}/workspace/${branch}/tests			            ${testsbase}
-# ${PREFIX}/workspace/${branch}/tests/RegressionTests	    ${testsdir}
+# ${PREFIX}/workspace/opalx				                    ${srcdir}
+# ${PREFIX}/workspace/build/${architecture}		            ${builddir}
+# ${PREFIX}/workspace/regression-tests-x			            ${testsbase}
+# ${PREFIX}/workspace/regression-tests-x/RegressionTests	    ${testsdir}
 
 # Get absolute path to this script, portable handling for macOS/Linux
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -285,10 +329,10 @@ fi
 declare -r bindir="${abs_scriptname%/*}"
 declare -r prefix="${bindir%/*}"
 declare -r workspace="${prefix}/workspace"
-declare -r branchdir="${workspace}/${branch}"
-declare -r srcdir="${branchdir}/src"
-declare    builddir="${branchdir}/${architecture}/build"
-declare -r testsbase="${branchdir}/tests"
+declare -r srcdir="${workspace}/opalx"
+declare    builddir="${workspace}/build/${architecture}"
+declare    opalx_exe_path="${builddir}/src"
+declare -r testsbase="${workspace}/regression-tests-x"
 declare -r testsdir="${testsbase}/RegressionTests"
 
 # Result variables
@@ -334,30 +378,32 @@ update_repo() {
 		git clone "${_url}" "${_dir}"
 		cd "${_dir}"
 		git checkout "${_branch}"
-        bash gen_OPALrevision
+        [[ -x gen_OPALrevision || -f gen_OPALrevision ]] && bash gen_OPALrevision
 		return 0
         # Otherwise merge the changes 
 	else
 		cd "${_dir}"
 		git rev-parse --is-inside-work-tree 1>/dev/null 2>&1 || \
 			die ${EC_GIT_ERROR} "${_dir}: is not a Git working directory!"
+        local current_branch
+        current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 		git checkout "${_branch}"
 		git fetch
 
 		local -i num_changed_files=$(git diff --name-only  "origin/${_branch}"  | wc -l | awk '{print $1}')
 		if (( $num_changed_files == 0 )); then
 			echo "Working directory '${_dir}' is up to date!"
+            [[ "${current_branch}" != "${_branch}" ]] && return 0
 			return 1
 		fi
 		git merge "origin/${_branch}"
-        bash gen_OPALrevision
+        [[ -x gen_OPALrevision || -f gen_OPALrevision ]] && bash gen_OPALrevision
 		return 0
 	fi
 }
 
 compile_opalx() {
     result_compile='failed'
-	cd "${branchdir}"
 	rm -rf "${builddir}"
 	mkdir -p "${builddir}"
 	cd "${builddir}"
@@ -394,7 +440,7 @@ run_regressiontests() {
 	if [[ -n "${opalx_args}" ]]; then
 		opts+=(${opalx_args[@]/#/--opalx-args=})
 	fi
-    opts+=("--opalx-exe-path=${builddir}/src")
+    opts+=("--opalx-exe-path=${opalx_exe_path}")
 	opts+=("--base-dir=${testsdir}")
     opts+=("--timestamp=${timestamp}")
     if [[ "${do_no_gpl}" == 'yes' ]]; then
@@ -707,23 +753,51 @@ main() {
         return $?
     fi
 
-    # local variable for the opalx binary
-    local -r opalxbin="${builddir}/src/opalx"
-    
-    # Getting latest repo version
-    printf "\nUpdating OPALX source repository... \n"
-	update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+    if [[ -n "${opt_opalx_build_dir}" ]]; then
+        builddir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${opt_opalx_build_dir}")
+        if [[ -z "${opt_opalx_exe_path}" ]]; then
+            opt_opalx_exe_path="${builddir}/src"
+        fi
+    fi
 
-    # If the binary does not exist we need to compile
-    [[ -e ${opalxbin} ]] || do_compile='yes'
+    if [[ -n "${opt_opalx_exe_path}" ]]; then
+        opalx_exe_path=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${opt_opalx_exe_path}")
+        if [[ ! -x "${opalx_exe_path}/opalx" ]]; then
+            die 1 "ERROR: --opalx-exe-path must point to a directory containing an executable opalx - ${opalx_exe_path}"
+        fi
+        do_compile='no'
+        if [[ "${explicit_actions}" == 'no' ]]; then
+            do_regtests='yes'
+        fi
+        result_compile='external'
+        printf "\nUsing existing OPALX executable: ${opalx_exe_path}/opalx\n"
+        if [[ -n "${opt_opalx_build_dir}" ]]; then
+            printf "Using existing OPALX build directory: ${builddir}\n"
+        fi
+    fi
+
+    # local variable for the opalx binary
+    local -r opalxbin="${opalx_exe_path}/opalx"
+
+    if [[ -z "${opt_opalx_exe_path}" ]]; then
+    
+        # Getting latest repo version
+        printf "\nUpdating OPALX source repository... \n"
+	    update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+
+        # If the binary does not exist we need to compile
+        [[ -e ${opalxbin} ]] || do_compile='yes'
+    fi
 	aborting='no'
  
     # Compilation
 	if [[ "${do_compile}" == "yes" ]]; then
         printf "\nStarting OPALX compilation \n"
 		compile_opalx
-		do_unittests='yes'
-		do_regtests='yes'
+        if [[ "${explicit_actions}" == 'no' ]]; then
+		    do_unittests='yes'
+		    do_regtests='yes'
+        fi
 	fi
     
     # Unit tests
@@ -733,8 +807,10 @@ main() {
     fi
 
     # Regression test
-    printf "\nUpdating regression tests repository...\n"
-	update_repo "${testsbase}" "${regtests_branch}" "${tests_repo_url}" && do_regtests='yes'
+    if [[ "${do_regtests}" == 'yes' || "${explicit_actions}" == 'no' ]]; then
+        printf "\nUpdating regression tests repository...\n"
+	    update_repo "${testsbase}" "${regtests_branch}" "${tests_repo_url}" && do_regtests='yes'
+    fi
 
     if [[ ${do_regtests} == 'yes' ]]; then
         printf "\nRunning regression tests for OPALX\n"

@@ -1,0 +1,20 @@
+{
+  "opalxSource": "/Users/adelmann/git/opalx",
+  "regBranch": "master",
+  "config": "debug-cpu.conf",
+  "publishDir": "/Users/adelmann/opalx-html",
+  "noGpl": true,
+  "force": false,
+  "compile": false,
+  "unitTests": true,
+  "regTests": true,
+  "webOnly": false,
+  "selectedTests": [],
+  "mode": "run",
+  "refSourceRoot": "$HOME/opalx",
+  "refDir": "/Users/adelmann/git/opalx/sandbox/bb-1",
+  "resultsTab": "plots",
+  "regressionWheelIndex": 0,
+  "regressionTestIndex": 0,
+  "plotIndex": 7
+}
