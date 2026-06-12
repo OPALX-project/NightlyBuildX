@@ -202,11 +202,22 @@ class OpalRegressionTests:
         for line in range(len(indexhtml)):
             if "insert here" in indexhtml[line]:
                 m = re.search(webfilename, indexhtml[line + 1])
-                fmt="<a href=\"%s\">%04d-%02d-%02d %02d:%02d</a> [passed:%d | broken:%d | failed:%d | total:%d] <br/>\n"
+                status_class = "ok" if rep.NrBroken() == 0 and rep.NrFailed() == 0 else "nok"
+                fmt=(
+                    "<div class=\"result-entry\">"
+                    "<a href=\"%s\">%04d-%02d-%02d %02d:%02d</a> "
+                    "<span class=\"badge %s\">passed:%d</span> "
+                    "<span class=\"badge %s\">broken:%d</span> "
+                    "<span class=\"badge %s\">failed:%d</span> "
+                    "<span class=\"muted\">total:%d</span>"
+                    "</div>\n"
+                )
                 text = fmt % (webfilename,
                               self.today.year, self.today.month, self.today.day,
                               self.today.hour, self.today.minute,
-                              self.totalNrPassed, rep.NrBroken(), rep.NrFailed(),
+                              status_class, self.totalNrPassed,
+                              "nok" if rep.NrBroken() else "ok", rep.NrBroken(),
+                              "nok" if rep.NrFailed() else "ok", rep.NrFailed(),
                               self.totalNrTests)
 
                 if m != None:
@@ -226,6 +237,7 @@ class OpalRegressionTests:
         shutil.copy (os.path.join (self.rundir, "html", "nok.png"), self.publish_dir);
         shutil.copy (os.path.join (self.rundir, "html", "results.xslt"), self.publish_dir)
         shutil.copy (os.path.join (self.rundir, "html", "accordion.js"), self.publish_dir)
+        shutil.copy (os.path.join (self.rundir, "html", "nightlybuildx.css"), self.publish_dir)
 
 class RegressionTest:
 
@@ -235,6 +247,7 @@ class RegressionTest:
         self.args = args
         self.use_gnuplot = use_gnuplot
         self.generate_web_page = generate_web_page
+        self.rundir = sys.path[0]
         self.jobnr = -1
         self.totalNrTests = 0
         self.totalNrPassed = 0
@@ -364,8 +377,7 @@ class RegressionTest:
 
         timing_plot = self._write_timing_overview()
         self._process_results(rep, success, timing_plot)
-        if self.generate_web_page:
-            self._write_local_plot_summary()
+        self._write_local_plot_summary()
 
     def compare_only(self):
         os.chdir(self.dirname)
@@ -445,6 +457,8 @@ class RegressionTest:
             return
 
         summary_path = pathlib.Path(self.dirname) / "plot-summary.html"
+        css_path = pathlib.Path(self.rundir) / "html" / "nightlybuildx.css"
+        css = css_path.read_text(encoding="utf-8") if css_path.is_file() else ""
         items = []
         for plot in plots:
             items.append(
@@ -461,18 +475,16 @@ class RegressionTest:
             "  <meta charset=\"utf-8\">\n"
             f"  <title>{self.simname} Plot Summary</title>\n"
             "  <style>\n"
-            "    body { font-family: sans-serif; margin: 1.5rem; }\n"
-            "    .grid { display: grid; grid-template-columns: repeat(2, 10cm); gap: 1rem; }\n"
-            "    figure { margin: 0; width: 10cm; }\n"
-            "    img { width: 10cm; height: 10cm; object-fit: contain; border: 1px solid #ccc; }\n"
-            "    figcaption { margin-top: 0.4rem; font-size: 0.85rem; word-break: break-word; }\n"
+            f"{css}\n"
             "  </style>\n"
             "</head>\n"
             "<body>\n"
+            "<main>\n"
             f"  <h1>{self.simname} Plot Summary</h1>\n"
-            "  <div class=\"grid\">\n"
+            "  <div class=\"plot-grid\">\n"
             + "\n".join(items)
             + "\n  </div>\n"
+            "</main>\n"
             "</body>\n"
             "</html>\n"
         )

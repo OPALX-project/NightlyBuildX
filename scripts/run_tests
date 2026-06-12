@@ -121,9 +121,9 @@ OPTIONS:
 	Compile OPAL even nothing changed and a binary exists.
 
 --no-clean-after-compile
-	Keep object files after a successful compile. By default the build
-	tree is cleaned after compilation to save storage while preserving
-	the compiled executable and configured build tree.
+	Keep build artifacts after a successful compile/test cycle. By
+	default the build tree is cleaned after tests to save storage while
+	preserving the configured build tree.
 
 --unit-tests
 	Run unit-tests even OPAL has not been compiled.
@@ -150,10 +150,10 @@ OPTIONS:
 	plots.
 
 --only-generate-web-page
-	Write a local plot-summary.html page in each regression test
-	directory after plot generation. If this is the only action flag,
-	run in local compare-only mode without update/build/run and also
-	generate the standard regression results HTML/XML page locally.
+	If this is the only action flag, run in local compare-only mode
+	without update/build/run and generate the standard regression
+	results HTML/XML page locally. Normal and local compare modes use
+	the same HTML structure and shared styling.
 
 -f | --force
 	Force compiling OPAL and run unit- and regression-tests.
@@ -546,10 +546,16 @@ compile_opalx() {
 	cmake "${cmake_args[@]}" "${srcdir}"
 	time make -j8
     result_compile='ok'
-    if [[ "${clean_after_compile}" == 'yes' ]]; then
-        printf "\nCleaning build object files after successful compile\n"
-        cmake --build . --target clean
-    fi
+}
+
+clean_build_artifacts() {
+    [[ "${clean_after_compile}" == 'yes' ]] || return 0
+    [[ "${result_compile}" == 'ok' ]] || return 0
+    [[ -d "${builddir}" ]] || return 0
+
+    cd "${builddir}"
+    printf "\nCleaning build object files after tests\n"
+    cmake --build . --target clean
 }
 
 apply_opalx_source_overrides() {
@@ -624,18 +630,34 @@ run_regressiontests() {
         xsltproc "${results_xslt}" "${results_xml}" > "${results_xml%.*}.html"
     fi
 
-    # get results from HTML file created/updated by regression-tests 
-    local index_html="${publish_regtests_dir}/index.html"
-    if [[ -f "${index_html}" ]]; then
-        read passed broken failed total < <(
-                awk "/${timestamp}/ {
-                        split(\$4, p, \":\");
-                        split(\$6, b, \":\");
-                        split(\$8, f, \":\");
-                        split(\$10, t,  \":\");
-                        printf \"%s %s %s %s\n\", p[2], b[2], f[2], t[2]; exit}" \
-                                < "${index_html}")
-        result_r_total=${total/\]}
+    # Get results from XML. Parsing the HTML index is brittle because it is
+    # presentation markup and changes with the report styling.
+    if [[ -f "${results_xml}" ]]; then
+        read total passed failed broken < <(
+            python3 -c '
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+tests = root.findall(".//Test")
+total = len(tests)
+passed = 0
+failed = 0
+broken = 0
+
+for test in tests:
+    state = (test.findtext("state") or "").strip().lower()
+    legacy_passed = (test.findtext("passed") or "").strip().lower()
+    if state == "passed" or legacy_passed == "true":
+        passed += 1
+    elif state == "broken":
+        broken += 1
+    elif state == "failed" or legacy_passed == "false":
+        failed += 1
+
+print(total, passed, failed, broken)
+' "${results_xml}")
+        result_r_total=${total}
         result_r_passed=${passed}
         result_r_failed=${failed}
         result_r_disabled='-'
@@ -822,6 +844,7 @@ update_overview() {
 
     # Define the styles to embed
     local -r style_content="<style>
+  $(cat ${bindir}/html/nightlybuildx.css 2>/dev/null || echo '')
   $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
   $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
 </style>
@@ -891,6 +914,7 @@ update_master_landing_page() {
     
     # Convert to HTML
     local -r style_content="<style>
+  $(cat ${bindir}/html/nightlybuildx.css 2>/dev/null || echo '')
   $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
   $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
 </style>
@@ -970,7 +994,7 @@ branch_architecture_checks_html() {
         regression_label=$(test_status_label "${regression_status}")
         date_col=$(trim_text "${date_col}")
 
-        printf '        <div class="arch-line"><a href="%s/%s/index.html">%s</a><span class="badge %s"><span class="dot"></span>Unit %s</span><span class="badge %s"><span class="dot"></span>Reg %s</span><span class="run-date">%s</span></div>\n' \
+        printf '        <div class="arch-line"><a href="%s/%s/index.html">%s</a><span class="badge %s">Unit %s</span><span class="badge %s">Reg %s</span><span class="run-date">%s</span></div>\n' \
             "${branch_name}" "${arch_name}" "${arch_name}" \
             "${unit_status}" "${unit_label}" \
             "${regression_status}" "${regression_label}" \
@@ -984,6 +1008,7 @@ update_branch_selector_page() {
     local -r overview_dir="${publish_dir}/overview"
     local -r selector_html="${overview_dir}/index.html"
     mkdir -p "${overview_dir}"
+    cp "${bindir}/html/nightlybuildx.css" "${overview_dir}/nightlybuildx.css"
 
     local -a branch_dirs=()
     while IFS= read -r branch_dir; do
@@ -997,24 +1022,14 @@ update_branch_selector_page() {
             '<head>' \
             '  <meta charset="utf-8">' \
             '  <title>OPALX Regression Test Branches</title>' \
+            '  <link rel="stylesheet" href="nightlybuildx.css">' \
             '  <style>' \
-            '    body { font-family: system-ui, sans-serif; margin: 2rem; color: #20242a; }' \
-            '    main { max-width: 72rem; }' \
-            '    h1 { margin-top: 0; border-bottom: 3px solid #2c5aa0; padding-bottom: 0.5rem; }' \
             '    label { display: block; font-weight: 600; margin: 1.5rem 0 0.4rem; }' \
             '    select { min-width: 18rem; padding: 0.45rem; font: inherit; }' \
-            '    table { border-collapse: collapse; width: 100%; margin-top: 1.5rem; }' \
-            '    th, td { border-bottom: 1px solid #d8dde5; padding: 0.55rem; text-align: left; }' \
-            '    a { color: #1d4f91; }' \
+            '    table { width: 100%; }' \
             '    .branch { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }' \
             '    .arch-checks { margin-top: 0.45rem; display: grid; gap: 0.35rem; }' \
             '    .arch-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }' \
-            '    .badge { display: inline-flex; align-items: center; gap: 0.25rem; border: 1px solid #ccd3dd; border-radius: 0.25rem; padding: 0.12rem 0.35rem; font-size: 0.82rem; }' \
-            '    .dot { width: 0.65rem; height: 0.65rem; border-radius: 50%; display: inline-block; background: #9aa3af; }' \
-            '    .ok .dot { background: #15803d; }' \
-            '    .nok .dot { background: #b91c1c; }' \
-            '    .skip .dot { background: #9aa3af; }' \
-            '    .run-date { color: #667085; font-size: 0.82rem; }' \
             '  </style>' \
             '</head>' \
             '<body>' \
@@ -1055,6 +1070,7 @@ update_branch_selector_page() {
 run_current_branch() {
     set_branch_context
     reset_results
+    local -i ec=0
 
     printf "\n== OPALX branch: %s ==\n" "${branch}"
 
@@ -1141,10 +1157,12 @@ run_current_branch() {
 
     if [[ ${do_regtests} == 'yes' ]]; then
         printf "\nRunning regression tests for OPALX\n"
-        run_regressiontests || return 1
+        run_regressiontests || ec=$?
     fi
 
     update_overview
+    clean_build_artifacts
+    return ${ec}
 }
 
 main() {

@@ -4,11 +4,12 @@ Automated build and testing framework for OPALX. This repository contains script
 
 NightlyBuildX now supports a local regression-analysis workflow in addition to the full nightly path. The new **--run-local-now** mode compares existing outputs without updating repositories, rebuilding OPALX, rerunning tests, or launching new
   simulations. The related **--only-generate-web-page** mode can be used from either a single test directory or the parent RegressionTests directory and generates the usual regression HTML/XML report locally, including copied plot assets and index pages.
+  Normal nightly runs, local compare-only runs, regression result indexes, detailed result pages, and per-test plot summaries now use the same shared HTML styling.
 
   Regression comparison plotting now supports two backends. By default the suite uses gnuplot; with --no-gpl it switches to a Python/matplotlib backend. The wrapper checks these dependencies early and fails with a clear message if the required plotting
   tool is not available. The Python plots were also cleaned up for readability, including explicit scientific tick labels and improved delta-axis formatting.
 
-  The reporting side was extended as well. Local runs can generate plot-summary.html, and published regression pages now include per-test timing-overview plots when both timing.dat and reference/timing.dat are available. The results pages also show a
+  The reporting side was extended as well. Regression runs generate plot-summary.html, and published regression pages now include per-test timing-overview plots when both timing.dat and reference/timing.dat are available. The results pages also show a
   global run-metadata block with host, architecture, backend, ranks, threads, and device. Finally, **run_tests* now accepts **--opalx-branch** and **--regtests-branch** so branch selection can be overridden directly on the command line while still allowing config
   files to provide the defaults.
 
@@ -81,7 +82,7 @@ Delete `gui/run-history.json` for a clean Results Browser history. Published XML
 *   `--branches-file=FILE`: Read OPALX branches to build and test. If `~/branches.txt` exists and `--opalx-branch` is not set, it is used automatically.
 *   `--force`, `-f`: Force compilation and running of all tests.
 *   `--compile`: Force compilation.
-*   `--no-clean-after-compile`: Keep object files after a successful compile. By default the build tree is cleaned after compilation to save storage while preserving the compiled executable and configured build tree.
+*   `--no-clean-after-compile`: Keep build artifacts after a successful compile/test cycle. By default the build tree is cleaned after tests to save storage while preserving the configured build tree.
 *   `--unit-tests`: Force running unit tests (runs `ctest -L unit` in the build directory; requires `OPALX_ENABLE_UNIT_TESTS=ON` in your config).
 *   `--reg-tests`: Force running regression tests.
 *   `--test`: Run only the `Spin-Tracking` regression test.

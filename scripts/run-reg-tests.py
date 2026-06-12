@@ -100,7 +100,7 @@ def main(argv):
                         help='Use Python plotting instead of gnuplot for comparison plots')
     parser.add_argument('--only-generate-web-page',
                         dest='generate_web_page', action='store_true',
-                        help='Write a local plot-summary.html page and generate the standard regression results HTML/XML page')
+                        help='Generate the standard regression results HTML/XML page in local compare mode')
 
     args = parser.parse_args()
 
