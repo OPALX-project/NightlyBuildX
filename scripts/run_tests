@@ -884,6 +884,7 @@ render_org_page() {
         --metadata title="${title}" \
         --include-in-header="${style_file}" \
         -s -o "${index_org%.*}.html" "${index_org}"
+    perl -0pi -e 's/[ \t]+\n/\n/g' "${index_org%.*}.html"
     rm -f "${style_file}"
 }
 
