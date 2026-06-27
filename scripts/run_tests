@@ -992,12 +992,37 @@ latest_overview_row() {
     awk '/^\| [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {print; exit}' "${index_org}"
 }
 
+strip_org_link_text() {
+    local value="$1"
+    value=$(trim_text "${value}")
+    while [[ "${value}" =~ \[\[[^][]+\]\[([^][]+)\]\] ]]; do
+        value="${value/${BASH_REMATCH[0]}/${BASH_REMATCH[1]}}"
+    done
+    printf "%s" "${value}"
+}
+
+run_count_value() {
+    local report="$1"
+    local key="$2"
+    report=$(strip_org_link_text "${report}")
+    if [[ "${report}" =~ ${key}:([0-9]+) ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    else
+        printf "-"
+    fi
+}
+
 test_status_class() {
     local report="$1"
     report=$(trim_text "${report}")
+    report=$(strip_org_link_text "${report}")
 
     if [[ -z "${report}" || "${report}" == "-" ]]; then
         printf "skip"
+    elif [[ "${report}" == "ok" ]]; then
+        printf "ok"
+    elif [[ "${report}" == "failed" || "${report}" == "nok" ]]; then
+        printf "nok"
     elif [[ "${report}" == *"failed:0"* && ( "${report}" == *"broken:0"* || "${report}" == *"broken:-"* ) ]]; then
         printf "ok"
     else
@@ -1066,56 +1091,127 @@ update_branch_selector_page() {
         [[ -f "${branch_dir}/index.html" ]] && branch_dirs+=( "$(basename "${branch_dir}")" )
     done < <(find "${overview_dir}" -maxdepth 1 -type d ! -path "${overview_dir}" | sort)
 
+    local latest_date="-"
+    local latest_branch="-"
+    local latest_arch="-"
+    local total_arch=0
+    local ok_arch=0
+    local nok_arch=0
+    local branch_name branch_label label_file arch_dir arch_name index_org row
+    local _ date_col build_col unit_col regression_col __
+    local unit_status regression_status
+
+    for branch_name in "${branch_dirs[@]}"; do
+        while IFS= read -r arch_dir; do
+            [[ -f "${arch_dir}/index.org" ]] || continue
+            total_arch=$((total_arch + 1))
+            arch_name=$(basename "${arch_dir}")
+            row=$(latest_overview_row "${arch_dir}/index.org" || true)
+            if [[ -n "${row}" ]]; then
+                IFS='|' read -r _ date_col build_col unit_col regression_col __ <<< "${row}"
+                date_col=$(strip_org_link_text "${date_col}")
+                unit_status=$(test_status_class "${unit_col}")
+                regression_status=$(test_status_class "${regression_col}")
+                if [[ "${unit_status}" == "ok" && "${regression_status}" == "ok" ]]; then
+                    ok_arch=$((ok_arch + 1))
+                else
+                    nok_arch=$((nok_arch + 1))
+                fi
+                if [[ "${latest_date}" == "-" || "${date_col}" > "${latest_date}" ]]; then
+                    latest_date="${date_col}"
+                    label_file="${overview_dir}/${branch_name}/branch-name.txt"
+                    latest_branch="${branch_name}"
+                    [[ -f "${label_file}" ]] && latest_branch=$(<"${label_file}")
+                    latest_arch="${arch_name}"
+                fi
+            fi
+        done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
+    done
+
     {
         printf '%s\n' \
             '<!doctype html>' \
             '<html lang="en">' \
             '<head>' \
             '  <meta charset="utf-8">' \
-            '  <title>OPALX Regression Test Branches</title>' \
+            '  <meta name="viewport" content="width=device-width, initial-scale=1">' \
+            '  <title>OPALX Published Regression Results</title>' \
             '  <link rel="stylesheet" href="nightlybuildx.css">' \
-            '  <style>' \
-            '    label { display: block; font-weight: 600; margin: 1.5rem 0 0.4rem; }' \
-            '    select { min-width: 18rem; padding: 0.45rem; font: inherit; }' \
-            '    table { width: 100%; }' \
-            '    .branch { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }' \
-            '    .arch-checks { margin-top: 0.45rem; display: grid; gap: 0.35rem; }' \
-            '    .arch-line { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }' \
-            '  </style>' \
             '</head>' \
             '<body>' \
-            '<main>' \
-            '  <h1>OPALX Regression Test Branches</h1>' \
-            '  <label for="branchSelect">Branch</label>' \
-            '  <select id="branchSelect" onchange="if (this.value) window.location.href = this.value;">' \
-            '    <option value="">Select a branch...</option>'
-        local branch_name branch_label label_file
+            '  <header class="topbar">' \
+            '    <div class="brand"><strong>OPALX</strong><span>Published Regression Results</span></div>' \
+            '    <div class="scope"><span class="readonly">read-only published data</span><span class="muted mono">opal-live-doc</span></div>' \
+            '  </header>' \
+            '  <main class="dashboard">' \
+            '    <div class="page-head">' \
+            '      <div><h1>Browse Existing Results</h1><div class="hint">Selections only open already published branch and architecture pages.</div></div>' \
+            '    </div>' \
+            '    <div class="filters">' \
+            '      <div class="field"><label for="branchSelect">OPALX branch</label><select id="branchSelect" onchange="if (this.value) window.location.href = this.value;"><option value="">Select a branch...</option>'
         for branch_name in "${branch_dirs[@]}"; do
             label_file="${overview_dir}/${branch_name}/branch-name.txt"
             branch_label="${branch_name}"
             [[ -f "${label_file}" ]] && branch_label=$(<"${label_file}")
-            printf '    <option value="%s/index.html">%s</option>\n' "${branch_name}" "${branch_label}"
+            printf '        <option value="%s/index.html">%s</option>\n' "${branch_name}" "${branch_label}"
         done
         printf '%s\n' \
-            '  </select>' \
-            '  <table>' \
-            '    <thead><tr><th>Branch</th><th>Results</th></tr></thead>' \
-            '    <tbody>'
+            '      </select></div>' \
+            '      <div class="field"><label>Reference branch</label><select disabled><option>from published run metadata</option></select></div>' \
+            '      <div class="field"><label>Architecture</label><select disabled><option>select from table</option></select></div>' \
+            '      <div class="field"><label>Run date</label><select disabled><option>latest available first</option></select></div>' \
+            '    </div>' \
+            '    <div class="summary">'
+        printf '      <div class="metric"><span>Branches</span><b>%s</b><strong>published</strong></div>\n' "${#branch_dirs[@]}"
+        printf '      <div class="metric"><span>Architectures</span><b>%s</b><strong>%s ok, %s attention</strong></div>\n' "${total_arch}" "${ok_arch}" "${nok_arch}"
+        printf '      <div class="metric"><span>Latest run</span><b>%s</b><strong>%s / %s</strong></div>\n' "${latest_date}" "${latest_branch}" "${latest_arch}"
+        printf '      <div class="metric"><span>Mode</span><b>read-only</b><strong>no compile or run controls</strong></div>\n'
+        printf '%s\n' \
+            '    </div>' \
+            '    <section class="section">' \
+            '      <div class="section-head"><h2>Published Runs</h2><span class="hint">Newest row per branch and architecture</span></div>' \
+            '      <table class="runs">' \
+            '        <thead><tr><th>Branch</th><th>Architecture</th><th>Latest run</th><th>Build</th><th>Unit</th><th>Regression</th><th>Artifacts</th></tr></thead>' \
+            '        <tbody>'
         for branch_name in "${branch_dirs[@]}"; do
             label_file="${overview_dir}/${branch_name}/branch-name.txt"
             branch_label="${branch_name}"
             [[ -f "${label_file}" ]] && branch_label=$(<"${label_file}")
-            printf '      <tr><td class="branch">%s</td><td><a href="%s/index.html">Open results</a><div class="arch-checks">\n' "${branch_label}" "${branch_name}"
-            branch_architecture_checks_html "${overview_dir}" "${branch_name}"
-            printf '      </div></td></tr>\n'
+            while IFS= read -r arch_dir; do
+                [[ -f "${arch_dir}/index.org" ]] || continue
+                arch_name=$(basename "${arch_dir}")
+                index_org="${arch_dir}/index.org"
+                row=$(latest_overview_row "${index_org}" || true)
+                date_col="-"
+                build_col="-"
+                unit_col="-"
+                regression_col="-"
+                if [[ -n "${row}" ]]; then
+                    IFS='|' read -r _ date_col build_col unit_col regression_col __ <<< "${row}"
+                fi
+                date_col=$(strip_org_link_text "${date_col}")
+                build_col=$(strip_org_link_text "${build_col}")
+                unit_status=$(test_status_class "${unit_col}")
+                regression_status=$(test_status_class "${regression_col}")
+                printf '          <tr><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s/%s</span></td><td><span class="badge %s">%s/%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>\n' \
+                    "${branch_label}" \
+                    "${arch_name}" \
+                    "${date_col}" \
+                    "$(test_status_class "${build_col}")" "$(trim_text "${build_col}")" \
+                    "${unit_status}" "$(run_count_value "${unit_col}" "passed")" "$(run_count_value "${unit_col}" "total")" \
+                    "${regression_status}" "$(run_count_value "${regression_col}" "passed")" "$(run_count_value "${regression_col}" "total")" \
+                    "${branch_name}" "${arch_name}"
+            done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
         done
         printf '%s\n' \
-            '    </tbody>' \
-            '  </table>' \
-            '</main>' \
+            '        </tbody>' \
+            '      </table>' \
+            '    </section>' \
+            '  </main>' \
             '</body>' \
             '</html>'
     } > "${selector_html}"
+    perl -0pi -e 's/[ \t]+\n/\n/g' "${selector_html}"
 }
 
 run_current_branch() {
