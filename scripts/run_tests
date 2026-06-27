@@ -155,6 +155,13 @@ OPTIONS:
 	results HTML/XML page locally. Normal and local compare modes use
 	the same HTML structure and shared styling.
 
+--doNotCompileRun, --do-not-compile-run
+	Do not update repositories, compile OPALX, or run unit/regression
+	tests. Re-render the published overview HTML from existing result
+	files under --publish-dir without rewriting published branch,
+	architecture, or result names. This is intended for testing the
+	pushed opal-live-doc result GUI on already available nightly data.
+
 -f | --force
 	Force compiling OPAL and run unit- and regression-tests.
 
@@ -186,6 +193,7 @@ declare do_regtests='no'
 declare do_run_local_now='no'
 declare do_no_gpl='no'
 declare do_generate_web_page='no'
+declare do_not_compile_run='no'
 declare clean_after_compile='yes'
 declare explicit_actions='no'
 
@@ -300,6 +308,13 @@ while (( $# > 0 )); do
         --only-generate-web-page )
             explicit_actions='yes'
             do_generate_web_page='yes'
+            ;;
+        --doNotCompileRun | --do-not-compile-run )
+            explicit_actions='yes'
+            do_not_compile_run='yes'
+            do_compile='no'
+            do_unittests='no'
+            do_regtests='no'
             ;;
         --unit-tests )
             explicit_actions='yes'
@@ -450,14 +465,17 @@ read_branches_file() {
     (( ${#branches[@]} > 0 )) || die ${EC_ARG_ERROR} "ERROR: branches file is empty - ${file}"
 }
 
-restore_opalx_source_overrides() {
-    [[ "${PWD}" == "${srcdir}" ]] || return 0
-    [[ -f "src/PartBunch/FieldMirror.hpp" ]] || return 0
+read_published_branches() {
+    local -r overview_dir="${publish_dir}/overview"
+    [[ -d "${overview_dir}" ]] || return 0
 
-    if ! git diff --quiet -- "src/PartBunch/FieldMirror.hpp"; then
-        git checkout -- "src/PartBunch/FieldMirror.hpp"
-        echo "Restored generated FieldMirror.hpp override before branch checkout."
-    fi
+    local branch_dir label_file branch_name
+    while IFS= read -r branch_dir; do
+        branch_name=$(basename "${branch_dir}")
+        label_file="${branch_dir}/branch-name.txt"
+        [[ -f "${label_file}" ]] && branch_name=$(<"${label_file}")
+        [[ -n "${branch_name}" ]] && branches+=( "${branch_name}" )
+    done < <(find "${overview_dir}" -maxdepth 1 -type d ! -path "${overview_dir}" | sort)
 }
 
 checkout_requested_ref() {
@@ -515,7 +533,6 @@ update_repo() {
 		cd "${_dir}"
 		git rev-parse --is-inside-work-tree 1>/dev/null 2>&1 || \
 			die ${EC_GIT_ERROR} "${_dir}: is not a Git working directory!"
-        restore_opalx_source_overrides
         local current_branch
         current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
 		checkout_requested_ref "${_branch}"
@@ -556,22 +573,6 @@ clean_build_artifacts() {
     cd "${builddir}"
     printf "\nCleaning build object files after tests\n"
     cmake --build . --target clean
-}
-
-apply_opalx_source_overrides() {
-    local -r patch_file="${bindir}/patches/FieldMirror.hpp"
-    local -r target_file="${srcdir}/src/PartBunch/FieldMirror.hpp"
-
-    [[ -f "${patch_file}" ]] || return 1
-    [[ -f "${target_file}" ]] || return 1
-
-    if ! cmp -s "${patch_file}" "${target_file}"; then
-        cp "${patch_file}" "${target_file}"
-        echo "Copied patched FieldMirror.hpp for latest IPPL compatibility."
-        return 0
-    fi
-
-    return 1
 }
 
 check_plot_dependencies() {
@@ -863,6 +864,55 @@ update_overview() {
     overview_dirty='no'
 }
 
+overview_style_content() {
+    printf '<style>\n'
+    cat "${bindir}/html/nightlybuildx.css" 2>/dev/null || true
+    cat "${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css" 2>/dev/null || true
+    cat "${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css" 2>/dev/null || true
+    printf '</style>\n'
+    printf '<script type="text/javascript">\n'
+    cat "${bindir}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js" 2>/dev/null || true
+    printf '</script>\n'
+}
+
+render_org_page() {
+    local -r index_org="$1"
+    local -r title="$2"
+    local -r style_file=$(mktemp "/tmp/nightlybuildx-style.XXXXXX")
+    overview_style_content > "${style_file}"
+    pandoc -f org -t html \
+        --metadata title="${title}" \
+        --include-in-header="${style_file}" \
+        -s -o "${index_org%.*}.html" "${index_org}"
+    rm -f "${style_file}"
+}
+
+regenerate_published_html_for_branch() {
+    [[ -n "${publish_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: --doNotCompileRun requires --publish-dir"
+
+    local -r published_branch_dir="${publish_dir}/overview/${branch_slug}"
+    if [[ ! -d "${published_branch_dir}" ]]; then
+        printf "No published overview directory for branch '%s' (%s), skipping.\n" "${branch}" "${published_branch_dir}"
+        update_branch_selector_page
+        return 0
+    fi
+
+    local arch_dir index_org
+    while IFS= read -r arch_dir; do
+        architecture=$(basename "${arch_dir}")
+        index_org="${arch_dir}/index.org"
+        if [[ -f "${index_org}" ]]; then
+            printf "Re-render published overview: %s / %s\n" "${branch}" "${architecture}"
+            render_org_page "${index_org}" "OPALX"
+        fi
+    done < <(find "${published_branch_dir}" -maxdepth 1 -type d ! -path "${published_branch_dir}" | sort)
+
+    if [[ -f "${published_branch_dir}/index.org" ]]; then
+        render_org_page "${published_branch_dir}/index.org" "OPALX Regression Tests"
+    fi
+    update_branch_selector_page
+}
+
 update_master_landing_page() {
     # Master landing page location
     local -r master_dir="${publish_dir}/overview/${branch_slug}"
@@ -1074,6 +1124,11 @@ run_current_branch() {
 
     printf "\n== OPALX branch: %s ==\n" "${branch}"
 
+    if [[ "${do_not_compile_run}" == 'yes' ]]; then
+        regenerate_published_html_for_branch
+        return 0
+    fi
+
     if [[ "${do_run_local_now}" == 'yes' || \
           "${do_regtests}" == 'yes' || \
           "${do_generate_web_page}" == 'yes' || \
@@ -1125,7 +1180,6 @@ run_current_branch() {
 	    if update_repo "${srcdir}" "${branch}" "${src_repo_url}"; then
             do_compile='yes'
         fi
-        apply_opalx_source_overrides && do_compile='yes' || true
 
         # If the binary does not exist we need to compile
         [[ -e ${opalxbin} ]] || do_compile='yes'
@@ -1168,11 +1222,21 @@ run_current_branch() {
 main() {
     local -a branches=()
     local default_branches_file="${HOME}/branches.txt"
+    if [[ "${do_not_compile_run}" == 'yes' && -z "${publish_dir}" ]]; then
+        die ${EC_ARG_ERROR} "ERROR: --doNotCompileRun requires --publish-dir"
+    fi
+
     if [[ "${opt_branches_file_set}" == 'yes' ]]; then
         read_branches_file "${opt_branches_file}"
+    elif [[ "${do_not_compile_run}" == 'yes' && -z "${opt_opalx_branch}" ]]; then
+        read_published_branches
     elif [[ -z "${opt_opalx_branch}" && -f "${default_branches_file}" ]]; then
         read_branches_file "${default_branches_file}"
     else
+        branches=( "${branch}" )
+    fi
+
+    if (( ${#branches[@]} == 0 )); then
         branches=( "${branch}" )
     fi
 
@@ -1180,10 +1244,12 @@ main() {
     local initial_do_unittests="${do_unittests}"
     local initial_do_regtests="${do_regtests}"
     local initial_managed_build_layout="${managed_build_layout}"
+    local initial_architecture="${architecture}"
 
     local selected_branch
     for selected_branch in "${branches[@]}"; do
         branch="${selected_branch}"
+        architecture="${initial_architecture}"
         do_compile="${initial_do_compile}"
         do_unittests="${initial_do_unittests}"
         do_regtests="${initial_do_regtests}"

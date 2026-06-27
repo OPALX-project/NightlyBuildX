@@ -87,6 +87,11 @@ Delete `gui/run-history.json` for a clean Results Browser history. Published XML
 *   `--reg-tests`: Force running regression tests.
 *   `--test`: Run only the `Spin-Tracking` regression test.
 *   `--test=NAME`: Run only one named regression test.
+*   `--doNotCompileRun`: Re-render published overview HTML from existing
+    results under `--publish-dir` without updating repositories, compiling, or
+    running unit/regression tests. Existing published branch, architecture, and
+    result names are preserved. This is useful for testing the pushed
+    `opal-live-doc` result GUI on already available nightly data.
 
 ### Example
 
