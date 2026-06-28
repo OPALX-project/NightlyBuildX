@@ -117,6 +117,13 @@
             <p>
               <!--<h3>Simulation: <xsl:value-of select="@name"/></h3>-->
               Description: <xsl:value-of select="@description"/>
+              <div class="result-table-toolbar">
+                <label>
+                  Browse result columns
+                  <input class="result-scroll-slider" type="range" min="0" max="1000" value="0"/>
+                </label>
+              </div>
+              <div class="result-table-scroll">
               <table>
                 <tr>
                   <th>Variable</th>
@@ -147,7 +154,8 @@
                     </xsl:otherwise>
                   </xsl:choose>
                 </xsl:for-each>
-              </table><br/>
+              </table>
+              </div><br/>
               <xsl:for-each select="Test">
                 <xsl:variable name="plotname" select="plot"/>
                 <xsl:if test="$plotname">

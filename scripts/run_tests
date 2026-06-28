@@ -1177,14 +1177,11 @@ update_branch_selector_page() {
         printf '%s\n' \
             '      </select></div>' \
             '      <div class="field"><label>Reference branch</label><select disabled><option>from published run metadata</option></select></div>' \
-            '      <div class="field"><label>Architecture</label><select disabled><option>select from table</option></select></div>' \
-            '      <div class="field"><label>Run date</label><select disabled><option>latest available first</option></select></div>' \
             '    </div>' \
             '    <div class="summary">'
         printf '      <div class="metric"><span>Branches</span><b>%s</b><strong>published</strong></div>\n' "${#branch_dirs[@]}"
         printf '      <div class="metric"><span>Architectures</span><b>%s</b><strong>%s ok, %s attention</strong></div>\n' "${total_arch}" "${ok_arch}" "${nok_arch}"
         printf '      <div class="metric"><span>Latest run</span><b>%s</b><strong>%s / %s</strong></div>\n' "${latest_date}" "${latest_branch}" "${latest_arch}"
-        printf '      <div class="metric"><span>Mode</span><b>read-only</b><strong>no compile or run controls</strong></div>\n'
         printf '%s\n' \
             '    </div>' \
             '    <section class="section">' \
@@ -1233,6 +1230,28 @@ update_branch_selector_page() {
     perl -0pi -e 's/[ \t]+\n/\n/g' "${selector_html}"
 }
 
+regenerate_published_regression_results_for_branch() {
+    [[ -n "${publish_dir}" ]] || return 0
+
+    local -r published_regtests_dir="${publish_dir}/regressionTests/${branch_slug}"
+    [[ -d "${published_regtests_dir}" ]] || return 0
+
+    local arch_dir results_xml
+    while IFS= read -r arch_dir; do
+        printf "Re-render published regression results: %s / %s\n" "${branch}" "$(basename "${arch_dir}")"
+        cp "${bindir}/html/results.xslt" "${arch_dir}/results.xslt"
+        cp "${bindir}/html/accordion.js" "${arch_dir}/accordion.js"
+        cp "${bindir}/html/nightlybuildx.css" "${arch_dir}/nightlybuildx.css"
+        cp "${bindir}/html/ok.png" "${arch_dir}/ok.png"
+        cp "${bindir}/html/nok.png" "${arch_dir}/nok.png"
+
+        while IFS= read -r results_xml; do
+            xsltproc "${arch_dir}/results.xslt" "${results_xml}" > "${results_xml%.*}.html"
+            perl -0pi -e 's/[ \t]+\n/\n/g' "${results_xml%.*}.html"
+        done < <(find "${arch_dir}" -maxdepth 1 -type f -name 'results_*.xml' | sort)
+    done < <(find "${published_regtests_dir}" -maxdepth 1 -type d ! -path "${published_regtests_dir}" | sort)
+}
+
 run_current_branch() {
     set_branch_context
     reset_results
@@ -1241,6 +1260,7 @@ run_current_branch() {
     printf "\n== OPALX branch: %s ==\n" "${branch}"
 
     if [[ "${do_not_compile_run}" == 'yes' ]]; then
+        regenerate_published_regression_results_for_branch
         regenerate_published_html_for_branch
         return 0
     fi
