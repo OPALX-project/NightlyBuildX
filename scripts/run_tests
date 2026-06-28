@@ -764,8 +764,8 @@ update_overview() {
     # First, extract existing table data if the file exists
     local -r tmpfile=$(mktemp "/tmp/index_table.XXXXXX")
     if [[ -e "${index_org}" ]]; then
-        # Extract only the table lines (starting from the date header)
-        awk '/\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found {print}' "${index_org}" > "${tmpfile}"
+        # Extract only the table rows, not the surrounding page layout.
+        awk '/^\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found && /^\|/ {print} found && !/^\|/ {exit}' "${index_org}" > "${tmpfile}"
     else
         # New file - create empty table
         echo '|       Date | build | unit-tests   | regression-tests   |' > "${tmpfile}"
@@ -788,6 +788,7 @@ update_overview() {
         sed -i '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
     fi
     cat "${tmpfile}" >> "${index_org}"
+    printf '%s\n' '#+BEGIN_EXPORT html' '</section></main>' '#+END_EXPORT' >> "${index_org}"
     rm -f "${tmpfile}"
 
     # links to generated XML pages used in the table
@@ -888,6 +889,36 @@ render_org_page() {
     rm -f "${style_file}"
 }
 
+refresh_architecture_overview_layout() {
+    local -r index_org="$1"
+    [[ -f "${index_org}" ]] || return 0
+
+    local -r tmpfile=$(mktemp "/tmp/index_table.XXXXXX")
+    awk '/^\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found && /^\|/ {print} found && !/^\|/ {exit}' "${index_org}" > "${tmpfile}"
+    if [[ ! -s "${tmpfile}" ]]; then
+        rm -f "${tmpfile}"
+        return 0
+    fi
+
+    local branch_escaped architecture_escaped
+    branch_escaped=$(escape_sed_replacement "${branch}")
+    architecture_escaped=$(escape_sed_replacement "${architecture}")
+    sed -e "s/@BRANCH@/${branch_escaped}/g" \
+        -e "s/@ARCHITECTURE@/${architecture_escaped}/g" \
+        "${bindir}/html/index.org" > "${index_org}"
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+        sed -i '' '/^#+SETUPFILE/d' "${index_org}"
+    else
+        sed -i '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+        sed -i '/^#+SETUPFILE/d' "${index_org}"
+    fi
+    cat "${tmpfile}" >> "${index_org}"
+    printf '%s\n' '#+BEGIN_EXPORT html' '</section></main>' '#+END_EXPORT' >> "${index_org}"
+    rm -f "${tmpfile}"
+}
+
 regenerate_published_html_for_branch() {
     [[ -n "${publish_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: --doNotCompileRun requires --publish-dir"
 
@@ -904,13 +935,12 @@ regenerate_published_html_for_branch() {
         index_org="${arch_dir}/index.org"
         if [[ -f "${index_org}" ]]; then
             printf "Re-render published overview: %s / %s\n" "${branch}" "${architecture}"
+            refresh_architecture_overview_layout "${index_org}"
             render_org_page "${index_org}" "OPALX"
         fi
     done < <(find "${published_branch_dir}" -maxdepth 1 -type d ! -path "${published_branch_dir}" | sort)
 
-    if [[ -f "${published_branch_dir}/index.org" ]]; then
-        render_org_page "${published_branch_dir}/index.org" "OPALX Regression Tests"
-    fi
+    update_master_landing_page
     update_branch_selector_page
 }
 
@@ -944,14 +974,16 @@ update_master_landing_page() {
     
     # Add links for each architecture
     if (( ${#architectures[@]} > 0 )); then
+        printf '%s\n' '#+BEGIN_EXPORT html' '<div class="links">' >> "${tmpfile}"
         for arch in "${architectures[@]}"; do
-            echo "" >> "${tmpfile}"
-            echo "- [[./${arch}/index.html][${arch} Details]]" >> "${tmpfile}"
+            printf '<a class="result-link" href="./%s/index.html"><span>%s</span><span class="mono">Open overview</span></a>\n' "${arch}" "${arch}" >> "${tmpfile}"
         done
+        printf '%s\n' '</div>' '#+END_EXPORT' >> "${tmpfile}"
     else
         echo "" >> "${tmpfile}"
         echo "No architectures available yet. Run tests to populate this page." >> "${tmpfile}"
     fi
+    printf '%s\n' '#+BEGIN_EXPORT html' '</section></main>' '#+END_EXPORT' >> "${tmpfile}"
     
     # Write the updated master page
     mv "${tmpfile}" "${master_org}"
@@ -963,20 +995,7 @@ update_master_landing_page() {
         sed -i '/^#+SETUPFILE/d' "${master_org}"
     fi
     
-    # Convert to HTML
-    local -r style_content="<style>
-  $(cat ${bindir}/html/nightlybuildx.css 2>/dev/null || echo '')
-  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
-  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
-</style>
-<script type=\"text/javascript\">
-  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js 2>/dev/null || echo '')
-</script>"
-    
-    pandoc -f org -t html \
-        --metadata title="OPALX Regression Tests" \
-        --include-in-header=<(echo "${style_content}") \
-        -s -o "${master_html}" "${master_org}"
+    render_org_page "${master_org}" "OPALX Regression Tests"
 }
 
 trim_text() {

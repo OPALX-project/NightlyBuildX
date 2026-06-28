@@ -241,6 +241,23 @@ th {
     font-size: 0.86rem;
 }
 
+.links {
+    display: grid;
+    gap: 0.55rem;
+}
+
+.result-link {
+    align-items: center;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--blue);
+    display: flex;
+    justify-content: space-between;
+    padding: 0.55rem 0.65rem;
+    text-decoration: none;
+}
+
 .result-list {
     display: grid;
     gap: 0.45rem;
