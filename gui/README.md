@@ -2,6 +2,8 @@
 
 Local web GUI for working with the shared OPALX checkout, builds, and regression tests.
 
+**Status:** Experimental. This GUI is not ready for production use. Use it for local exploration and workflow prototyping; use `scripts/run_tests` or the production wrapper scripts for nightly runs.
+
 ## Start
 
 ```bash

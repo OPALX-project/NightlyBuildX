@@ -35,6 +35,8 @@ To run the standard workflow (update, build if needed, test if needed):
 
 NightlyBuildX also includes a local browser GUI for day-to-day regression-test work:
 
+**Status:** OPALX Lab GUI is experimental and not ready for production use. It is useful for local exploration and workflow prototyping, but the production nightly workflow should continue to use wrapper scripts such as `~/bin/runOPALX-reg-test` and `scripts/run_tests` directly.
+
 ```bash
 python3 -B gui/opalx_gui.py
 ```
