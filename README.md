@@ -120,6 +120,58 @@ For `opal-live-doc`, commit and push the generated files after review. The Pages
 
 On `merlin6`, the cron-style wrapper `~/bin/runOPALX-reg-test` shows how the scripts are normally composed for published nightly output. The wrapper keeps the site and NightlyBuildX checkouts current, chooses branches, runs both GPU and CPU configurations, and then publishes the regenerated `opal-live-doc` content.
 
+The repository and script relationships look like this:
+
+```mermaid
+flowchart TD
+    wrapper["merlin6: ~/bin/runOPALX-reg-test"]
+    modules["mymodules.conf\ncompiler, MPI, CUDA, Python modules"]
+    branches["~/branches.txt\nOPALX branch list"]
+
+    nbxRemote[("GitHub\nOPALX-project/NightlyBuildX")]
+    nbxCheckout["merlin6 checkout\n/data/user/adelmann/NightlyBuildX"]
+    runTests["scripts/run_tests"]
+    configs["scripts/config/*.conf\ncpu-serial, gpu-cuda-a100"]
+
+    opalRemote[("GitHub\nOPALX-project/opalx")]
+    regRemote[("GitHub\nOPALX-project/regression-tests-x")]
+    opalCheckout["workspace/opalx\nselected OPALX branch"]
+    regCheckout["workspace/regression-tests-x\nselected reference/test branch"]
+    buildTree["workspace/build/<architecture>/build-<branch>\ncompiled OPALX"]
+
+    regRun["Regression and unit tests\nctest plus regression test runner"]
+    artifacts["Generated artifacts\nHTML, XML, logs, PNG plots"]
+
+    liveDoc[("Gitea\nAMAS/opal-live-doc")]
+    liveCheckout["merlin6 checkout\n/data/user/adelmann/opal-live-doc"]
+    publishDir["docs/opalx-regression-test\npublished dashboard tree"]
+    pages["PSI Pages\namas.pages.psi.ch/opal-live-doc"]
+
+    wrapper --> modules
+    wrapper --> branches
+    wrapper --> nbxCheckout
+    nbxRemote -->|"git pull"| nbxCheckout
+    nbxCheckout --> runTests
+    configs --> runTests
+    branches -->|"--branches-file or --opalx-branch"| runTests
+    modules --> runTests
+
+    opalRemote -->|"checkout selected branch"| opalCheckout
+    regRemote -->|"--regtests-branch"| regCheckout
+    runTests --> opalCheckout
+    runTests --> regCheckout
+    runTests --> buildTree
+    buildTree --> regRun
+    regCheckout --> regRun
+    regRun --> artifacts
+
+    liveDoc -->|"git pull"| liveCheckout
+    artifacts -->|"--publish-dir"| publishDir
+    liveCheckout --> publishDir
+    publishDir -->|"git add, commit, push"| liveDoc
+    liveDoc -->|"Pages render"| pages
+```
+
 A condensed version of the pattern is:
 
 ```bash
