@@ -239,6 +239,211 @@ Running without arguments reads the branch list from `${HOME}/branches.txt`:
 
 This wrapper is intentionally thin. The build/test behavior comes from the selected `scripts/config/*.conf` files and the `run_tests` options. In particular, `--regtests-branch master` selects the regression-tests-x branch used for tests and references, while `--publish-dir` points both architectures at the same published dashboard tree.
 
+## Deploy to Another Site
+
+To deploy the nightly regression workflow at another computing center, keep the same separation of responsibilities:
+
+*   NightlyBuildX owns orchestration, builds, tests, and HTML generation.
+*   OPALX is checked out and built in the NightlyBuildX workspace.
+*   `regression-tests-x` provides the test inputs and reference data.
+*   A site-local wrapper script loads modules, selects configs and branches, runs `scripts/run_tests`, and publishes generated HTML/PNG/log artifacts.
+*   The web repository, for example `opal-live-doc`, only stores already generated documentation and result artifacts.
+
+### 1. Prepare Repositories
+
+Create or select these checkouts on the target machine:
+
+```text
+/path/to/NightlyBuildX
+/path/to/opal-live-doc
+```
+
+NightlyBuildX will manage these working trees below its own `workspace/` directory:
+
+```text
+/path/to/NightlyBuildX/workspace/opalx
+/path/to/NightlyBuildX/workspace/regression-tests-x
+/path/to/NightlyBuildX/workspace/build/<architecture>/build-<branch>
+```
+
+The first full run can create/update the OPALX and regression-test checkouts. For production, the wrapper should still run `git pull` in the NightlyBuildX checkout and in the published web checkout before generating new output.
+
+### 2. Define Site Configurations
+
+Add one configuration file per target architecture under `scripts/config/`, for example:
+
+```text
+scripts/config/debug-site-cpu.conf
+scripts/config/debug-site-gpu.conf
+```
+
+Each config should define at least:
+
+```bash
+architecture="cpu-serial"
+branch="master"
+do_regressiontests='yes'
+do_unittests='yes'
+cmake_args+=("-DCMAKE_BUILD_TYPE=Debug")
+cmake_args+=("-DOPALX_ENABLE_UNIT_TESTS=ON")
+```
+
+GPU configs must also include the site-specific CMake options, compiler wrappers, CUDA/HIP settings, and scheduler/module assumptions needed by OPALX. Unit tests only run when both `do_unittests='yes'` and the OPALX build cache has `OPALX_ENABLE_UNIT_TESTS=ON`.
+
+### 3. Define the Module Environment
+
+Create a site-local module setup file, for example:
+
+```text
+${HOME}/mymodules.conf
+```
+
+It should load the compiler, MPI, Python, CMake, plotting, CUDA/HIP, and scheduler integration needed by the selected configs. The wrapper should source this file before calling `scripts/run_tests`.
+
+For Python plotting with `--no-gpl`, make sure `python3` can import `matplotlib`. Without `--no-gpl`, make sure `gnuplot` is available.
+
+### 4. Choose Branch Selection Policy
+
+For a single branch, pass it directly to the wrapper and forward it as:
+
+```bash
+--opalx-branch feature/my-branch
+```
+
+For a nightly branch set, keep a file such as:
+
+```text
+${HOME}/branches.txt
+```
+
+with one branch per line:
+
+```text
+master
+feature/my-branch
+```
+
+Forward it to `run_tests` with:
+
+```bash
+--branches-file "${HOME}/branches.txt"
+```
+
+Select the regression-test/reference branch independently:
+
+```bash
+--regtests-branch master
+```
+
+### 5. Create the Published Output Tree
+
+Choose the publish directory inside the web repository:
+
+```text
+/path/to/opal-live-doc/docs/opalx-regression-test
+```
+
+All architectures and branches should publish into the same root. The generated layout is:
+
+```text
+docs/opalx-regression-test/
+  overview/
+  regressionTests/<branch>/<architecture>/
+  unitTests/<branch>/<architecture>/
+```
+
+Do not rename generated result pages or plot directories after publication. The dashboard expects the existing names.
+
+### 6. Write the Site Wrapper
+
+Use a thin wrapper that updates repositories, sets the environment, chooses branches, runs each architecture, and then publishes the web repository:
+
+```bash
+#!/bin/bash -l
+set -euo pipefail
+
+export NIGHTLYBUILDX=/path/to/NightlyBuildX
+export LIVEDOC=/path/to/opal-live-doc
+export PUBLISH_DIR="${LIVEDOC}/docs/opalx-regression-test"
+export TIMESTAMP="$(date)"
+
+cd "${LIVEDOC}"
+git pull -v
+
+cd "${NIGHTLYBUILDX}"
+git pull -v
+
+branch_args=()
+if [[ $# -gt 0 ]]; then
+    branch_args=(--opalx-branch "$1")
+else
+    branch_args=(--branches-file "${HOME}/branches.txt")
+fi
+
+source "${HOME}/mymodules.conf"
+
+cd "${NIGHTLYBUILDX}/scripts"
+
+bash run_tests \
+    --no-clean-after-compile \
+    --no-gpl \
+    --config ./config/debug-site-gpu.conf \
+    "${branch_args[@]}" \
+    --regtests-branch master \
+    --reg-tests \
+    --unit-tests \
+    --publish-dir "${PUBLISH_DIR}"
+
+bash run_tests \
+    --no-clean-after-compile \
+    --no-gpl \
+    --config ./config/debug-site-cpu.conf \
+    "${branch_args[@]}" \
+    --regtests-branch master \
+    --reg-tests \
+    --unit-tests \
+    --publish-dir "${PUBLISH_DIR}"
+
+cd "${LIVEDOC}"
+git add docs/opalx-regression-test
+git commit -m "newest test results obtained on ${TIMESTAMP}"
+git push
+```
+
+### 7. Validate Without Running Tests
+
+Before enabling the wrapper in cron or a scheduler, validate the HTML generation from existing data:
+
+```bash
+cd /path/to/NightlyBuildX/scripts
+bash run_tests --doNotCompileRun --publish-dir /path/to/opal-live-doc/docs/opalx-regression-test
+```
+
+Review:
+
+```text
+overview/index.html
+overview/<branch>/index.html
+overview/<branch>/<architecture>/index.html
+regressionTests/<branch>/<architecture>/results_<date>_<time>.html
+```
+
+Then commit and push the web repository to trigger the site renderer.
+
+### 8. Operational Checks
+
+For the first production run at a new site, check:
+
+*   The wrapper can update both repositories.
+*   The selected OPALX branches exist.
+*   The selected `regression-tests-x` branch exists.
+*   Each config creates a distinct `architecture` name.
+*   OPALX builds in `workspace/build/<architecture>/build-<branch>`.
+*   `ctest -L unit` finds tests when unit tests are enabled.
+*   Regression result pages contain plots and logs.
+*   `overview/index.html` lists all expected branches.
+*   The web repository push triggers the public site render.
+
 ### Example
 
 Run with a specific configuration (e.g., Debug CPU):
