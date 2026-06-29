@@ -2,18 +2,13 @@
 
 Automated build and testing framework for OPALX. This repository contains scripts to fetch, build, and test the OPALX project and its regression tests.
 
-NightlyBuildX now supports a local regression-analysis workflow in addition to the full nightly path. The new **--run-local-now** mode compares existing outputs without updating repositories, rebuilding OPALX, rerunning tests, or launching new
-  simulations. The related **--only-generate-web-page** mode can be used from either a single test directory or the parent RegressionTests directory and generates the usual regression HTML/XML report locally, including copied plot assets and index pages.
-  Normal nightly runs, local compare-only runs, regression result indexes, detailed result pages, and per-test plot summaries now use the same shared HTML styling.
+NightlyBuildX supports both the full nightly workflow and local result-analysis workflows. `--run-local-now` compares existing outputs without updating repositories, rebuilding OPALX, rerunning tests, or launching new simulations. `--only-generate-web-page` can be used from either a single test directory or the parent `RegressionTests` directory and generates the usual regression HTML/XML report locally, including copied plot assets and index pages.
 
-  Regression comparison plotting now supports two backends. By default the suite uses gnuplot; with --no-gpl it switches to a Python/matplotlib backend. The wrapper checks these dependencies early and fails with a clear message if the required plotting
-  tool is not available. The Python plots were also cleaned up for readability, including explicit scientific tick labels and improved delta-axis formatting.
+Published regression pages use a modern read-only results dashboard for already completed runs. The dashboard is organized by OPALX branch and architecture, preserves existing result file names, and is suitable for publishing to `opal-live-doc`. Pushing the generated `opal-live-doc` content triggers the Pages render; the HTML generation step itself does not rename result pages or plot assets.
 
-  The reporting side was extended as well. Regression runs generate plot-summary.html, and published regression pages now include per-test timing-overview plots when both timing.dat and reference/timing.dat are available. The results pages also show a
-  global run-metadata block with host, architecture, backend, ranks, threads, and device. Finally, **run_tests* now accepts **--opalx-branch** and **--regtests-branch** so branch selection can be overridden directly on the command line while still allowing config
-  files to provide the defaults.
+Regression comparison plotting supports two backends. By default the suite uses gnuplot; with `--no-gpl` it switches to a Python/matplotlib backend. The wrapper checks these dependencies early and fails with a clear message if the required plotting tool is not available. Generated comparison plots are square, have no embedded plot title, and use shared scientific exponent offsets where applicable.
 
-
+The reporting side also includes `plot-summary.html`, per-test `timing-overview` plots when both `timing.dat` and `reference/timing.dat` are available, result-page plot sliders that select one plot to display, and run metadata with host, architecture, backend, ranks, threads, and device. `scripts/run_tests` accepts `--opalx-branch` and `--regtests-branch` so the OPALX branch and regression-test reference branch can be overridden directly while still allowing configuration files to provide defaults.
 
 ## Overview
 
@@ -23,10 +18,10 @@ The core of this system is the `scripts/run_tests` bash script:
 3.  **Build**: Compiles OPALX.
 4.  **Test**: Runs regression tests.
 5.  **Report**: Generates HTML reports organized by architecture:
-    - **Branch selector**: Top-level overview at `overview/index.html`
-    - **Branch landing page**: Single overview showing all architectures at `overview/<branch>/index.html`
-    - **Architecture-specific pages**: Detailed history per configuration
-    - **Test results**: Individual test outputs and comparisons
+    - **Branch selector**: Top-level read-only overview at `overview/index.html`.
+    - **Branch landing page**: Single overview showing all published architectures at `overview/<branch>/index.html`.
+    - **Architecture-specific pages**: Detailed history per branch/configuration pair.
+    - **Test results**: Individual result pages with metadata, summaries, one-plot-at-a-time browsing, and links to logs and plots.
 
 ## Usage
 
@@ -80,6 +75,8 @@ Delete `gui/run-history.json` for a clean Results Browser history. Published XML
 *   `--config=FILE`: Specify a configuration file (e.g., from `scripts/config/`).
 *   `--publish-dir=DIR`: Directory to publish HTML results.
 *   `--branches-file=FILE`: Read OPALX branches to build and test. If `~/branches.txt` exists and `--opalx-branch` is not set, it is used automatically.
+*   `--opalx-branch=BRANCH`: Select one OPALX branch explicitly, overriding the branch list.
+*   `--regtests-branch=BRANCH`: Select the regression-tests-x branch used for tests and references.
 *   `--force`, `-f`: Force compilation and running of all tests.
 *   `--compile`: Force compilation.
 *   `--no-clean-after-compile`: Keep build artifacts after a successful compile/test cycle. By default the build tree is cleaned after tests to save storage while preserving the configured build tree.
@@ -92,6 +89,32 @@ Delete `gui/run-history.json` for a clean Results Browser history. Published XML
     running unit/regression tests. Existing published branch, architecture, and
     result names are preserved. This is useful for testing the pushed
     `opal-live-doc` result GUI on already available nightly data.
+
+## Published Results GUI
+
+The published HTML under `<publish-dir>/overview` and `<publish-dir>/regressionTests` is a read-only browser for data from already completed nightly or local runs. It does not configure, compile, or start simulations. Those actions remain controlled by `scripts/run_tests`, the local OPALX Lab GUI, wrapper scripts, or cron jobs.
+
+The top-level overview lists available branches. A branch page lists available architectures for that branch, and an architecture page lists the available result dates. Result pages use the same file names as before, for example:
+
+```text
+regressionTests/<branch>/<architecture>/results_<date>_<time>.html
+```
+
+Each result page contains:
+
+*   A run metadata block with host, architecture, backend, ranks, threads, and device when that information is available.
+*   Regression summary tables.
+*   A plot browser per test. The horizontal slider selects which plot frame is visible; it does not scroll the table.
+*   Native horizontal scrolling for wide tables.
+*   Links to copied plot assets and logs.
+
+Use render-only mode to refresh the published dashboard from existing data:
+
+```bash
+./scripts/run_tests --doNotCompileRun --publish-dir /path/to/opal-live-doc/docs/opalx-regression-test
+```
+
+For `opal-live-doc`, commit and push the generated files after review. The Pages pipeline renders the published site from the pushed repository content.
 
 ### Example
 
@@ -159,6 +182,10 @@ feature/my-branch
 For each branch, NightlyBuildX checks out the single managed OPALX source tree at `workspace/opalx`, builds in `workspace/build/<architecture>/build-<branch>/`, runs the requested tests, and publishes results under the branch-specific HTML tree.
 
 The local wrapper `~/bin/runOPALX-reg-test-local` continues to run a single branch because it passes `--opalx-branch`. Omit that option, or pass `--branches-file=~/branches.txt`, to run all branches from the file.
+
+## Unit Tests
+
+Unit tests are run with `ctest -L unit` when `do_unittests='yes'` is set for the active configuration and the OPALX build was configured with unit tests enabled. The CMake cache must contain `OPALX_ENABLE_UNIT_TESTS=ON`; otherwise `ctest -L unit` will find no unit tests even if `do_unittests='yes'` is set.
 
 ## Regression Tests
 The regression tests are located on the `cleanup` branch in the [regression-tests-x](https://github.com/OPALX-project/regression-tests-x/tree/cleanup) repository of the OPALX project.
