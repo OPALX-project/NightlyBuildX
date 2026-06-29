@@ -656,7 +656,6 @@ class RegressionTest:
         ax.set_xticks(xpos)
         ax.set_xticklabels(labels, rotation=90, ha="center", va="top")
         ax.set_ylabel("Wall time [s]")
-        ax.set_title("Timing Overview (timers covering 80% of Wall)")
         ax.grid(True, axis="y", linestyle="--", linewidth=0.7, alpha=0.5)
 
         legend_handles = [

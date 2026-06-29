@@ -284,7 +284,7 @@ class StatTest:
 
         plotcmd = "set terminal png size 800,800 enhanced truecolor\n"
         plotcmd += "set output '" + output_fname + "'\n"
-        plotcmd += "set title '" + self.name + "'\n"
+        plotcmd += "set size square\n"
         plotcmd += "set key below\n"
         plotcmd += "set grid lw 3 dt 2 lc rgb "#bbbbbb" \n"
         plotcmd += "set ytics nomirror\n"
@@ -312,7 +312,7 @@ class StatTest:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
-            from matplotlib.ticker import MaxNLocator
+            from matplotlib.ticker import MaxNLocator, ScalarFormatter
         except ModuleNotFoundError:
             raise RuntimeError(
                 "Python plotting requested (--no-gpl), but matplotlib is not installed."
@@ -345,8 +345,10 @@ class StatTest:
                 "legend.fontsize": 10,
             }
         )
-        fig, ax1 = plt.subplots(figsize=(10.0 * cm_to_inch, 10.0 * cm_to_inch), dpi=200)
+        fig, ax1 = plt.subplots(figsize=(11.5 * cm_to_inch, 11.5 * cm_to_inch), dpi=200)
         ax2 = ax1.twinx()
+        ax1.set_box_aspect(1)
+        ax2.set_box_aspect(1)
 
         ax1.plot(path_length, values, linewidth=2.0, label=self.opalRevision)
         ax1.plot(ref_path_length, ref_values, linewidth=2.0, label=self.refRevision)
@@ -356,7 +358,6 @@ class StatTest:
         if max_abs_difference:
             ax2.set_ylim(-1.08 * max_abs_difference, 1.08 * max_abs_difference)
 
-        ax1.set_title(self.name)
         ax1.set_xlabel(f"s [{x_unit}]")
         ax1.set_ylabel(f"{pretty_var} [{y_unit}]")
         ax2.set_ylabel(rf"$\Delta$ {pretty_var} [{y_unit}]")
@@ -366,9 +367,13 @@ class StatTest:
         if y_unit == "mm":
             ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.2f}"))
         else:
-            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.3e}"))
+            y_formatter = ScalarFormatter(useMathText=True)
+            y_formatter.set_powerlimits((-3, 3))
+            ax1.yaxis.set_major_formatter(y_formatter)
         ax2.yaxis.set_major_locator(MaxNLocator(nbins=5, min_n_ticks=3, prune=None))
-        ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda value, _: f"{value:.2e}"))
+        diff_formatter = ScalarFormatter(useMathText=True)
+        diff_formatter.set_powerlimits((-3, 3))
+        ax2.yaxis.set_major_formatter(diff_formatter)
 
         ax1.grid(True, linestyle="--", linewidth=0.7, alpha=0.5)
 
