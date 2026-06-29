@@ -116,6 +116,75 @@ Use render-only mode to refresh the published dashboard from existing data:
 
 For `opal-live-doc`, commit and push the generated files after review. The Pages pipeline renders the published site from the pushed repository content.
 
+## Production Wrapper Example
+
+On `merlin6`, the cron-style wrapper `~/bin/runOPALX-reg-test` shows how the scripts are normally composed for published nightly output. The wrapper keeps the site and NightlyBuildX checkouts current, chooses branches, runs both GPU and CPU configurations, and then publishes the regenerated `opal-live-doc` content.
+
+A condensed version of the pattern is:
+
+```bash
+#!/bin/bash -l
+
+export OPALLIVEDOC=/path/to/opal-live-doc
+export TIMESTAMP="$(date)"
+
+cd "${OPALLIVEDOC}"
+git pull -v
+
+cd /path/to/NightlyBuildX/scripts
+git pull -v
+
+branch_args=()
+if [[ $# -gt 0 ]]; then
+    branch_args=(--opalx-branch "$1")
+else
+    branch_args=(--branches-file "${HOME}/branches.txt")
+fi
+
+source "${HOME}/mymodules.conf"
+export OMP_PLACES=threads
+export OMP_PROC_BIND=spread
+
+bash run_tests \
+    --no-clean-after-compile \
+    --no-gpl \
+    --config ./config/debug-merlin6-a100.conf \
+    "${branch_args[@]}" \
+    --regtests-branch master \
+    --reg-tests \
+    --unit-tests \
+    --publish-dir "${OPALLIVEDOC}/docs/opalx-regression-test"
+
+bash run_tests \
+    --no-clean-after-compile \
+    --no-gpl \
+    --config ./config/debug-merlin6-cpu.conf \
+    "${branch_args[@]}" \
+    --regtests-branch master \
+    --reg-tests \
+    --unit-tests \
+    --publish-dir "${OPALLIVEDOC}/docs/opalx-regression-test"
+
+cd "${OPALLIVEDOC}"
+git add .
+git commit -m "newest test results obtained on ${TIMESTAMP}"
+git push
+```
+
+Passing one argument runs only that OPALX branch:
+
+```bash
+~/bin/runOPALX-reg-test feature/my-branch
+```
+
+Running without arguments reads the branch list from `${HOME}/branches.txt`:
+
+```bash
+~/bin/runOPALX-reg-test
+```
+
+This wrapper is intentionally thin. The build/test behavior comes from the selected `scripts/config/*.conf` files and the `run_tests` options. In particular, `--regtests-branch master` selects the regression-tests-x branch used for tests and references, while `--publish-dir` points both architectures at the same published dashboard tree.
+
 ### Example
 
 Run with a specific configuration (e.g., Debug CPU):
