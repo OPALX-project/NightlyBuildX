@@ -117,12 +117,6 @@
             <p>
               <!--<h3>Simulation: <xsl:value-of select="@name"/></h3>-->
               Description: <xsl:value-of select="@description"/>
-              <div class="result-table-toolbar">
-                <label>
-                  Browse result columns
-                  <input class="result-scroll-slider" type="range" min="0" max="1000" value="0"/>
-                </label>
-              </div>
               <div class="result-table-scroll">
               <table>
                 <tr>
@@ -156,18 +150,31 @@
                 </xsl:for-each>
               </table>
               </div><br/>
-              <xsl:for-each select="Test">
-                <xsl:variable name="plotname" select="plot"/>
-                <xsl:if test="$plotname">
-                  <xsl:variable name="varname" select="@var"/>
-                  <img class="plot-image" src="{plot}" alt="" title="" />
-                  <br/><br/>
-                </xsl:if>
-
-              </xsl:for-each>
-              <xsl:if test="timing_plot">
-                <img class="plot-image" src="{timing_plot}" alt="" title="" />
-                <br/><br/>
+              <xsl:if test="count(Test[plot]) + count(timing_plot) &gt; 0">
+                <div class="plot-browser">
+                  <div class="plot-toolbar">
+                    <label>
+                      Plot
+                      <input class="plot-selector-slider" type="range" min="0" max="{count(Test[plot]) + count(timing_plot) - 1}" value="0"/>
+                    </label>
+                    <span class="plot-counter"></span>
+                    <span class="plot-title"></span>
+                  </div>
+                  <div class="plot-stage">
+                    <xsl:for-each select="Test[plot]">
+                      <figure class="plot-frame" data-plot-index="{position() - 1}" data-plot-title="{@var}">
+                        <img class="plot-image" src="{plot}" alt="{@var}" title="{@var}" />
+                        <figcaption><xsl:value-of select="@var"/></figcaption>
+                      </figure>
+                    </xsl:for-each>
+                    <xsl:if test="timing_plot">
+                      <figure class="plot-frame" data-plot-index="{count(Test[plot])}" data-plot-title="timing overview">
+                        <img class="plot-image" src="{timing_plot}" alt="timing overview" title="timing overview" />
+                        <figcaption>timing overview</figcaption>
+                      </figure>
+                    </xsl:if>
+                  </div>
+                </div>
               </xsl:if>
               <br/>
             </p>

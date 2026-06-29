@@ -11,50 +11,64 @@ function setup() {
             } else {
                 panel.style.maxHeight = panel.scrollHeight + "px";
             }
-            updateResultSliders();
+            updatePanelHeight(panel);
         });
     }
 
-    setupResultSliders();
+    setupPlotBrowsers();
 }
 
-function setupResultSliders() {
-    var sliders = document.getElementsByClassName("result-scroll-slider");
+function setupPlotBrowsers() {
+    var browsers = document.getElementsByClassName("plot-browser");
     var i;
 
-    for (i = 0; i != sliders.length; i++) {
-        (function(slider) {
-            var wrapper = slider.parentElement.parentElement.nextElementSibling;
-            if (!wrapper || wrapper.className.indexOf("result-table-scroll") === -1) {
-                return;
-            }
+    for (i = 0; i != browsers.length; i++) {
+        setupPlotBrowser(browsers[i]);
+    }
+}
 
-            slider.max = 1000;
-            slider.addEventListener("input", function() {
-                var maxScroll = Math.max(0, wrapper.scrollWidth - wrapper.clientWidth);
-                wrapper.scrollLeft = maxScroll * (Number(slider.value) / Number(slider.max));
-            });
-            wrapper.addEventListener("scroll", function() {
-                var maxScroll = Math.max(0, wrapper.scrollWidth - wrapper.clientWidth);
-                slider.value = maxScroll > 0 ? Math.round((wrapper.scrollLeft / maxScroll) * Number(slider.max)) : 0;
-            });
-        })(sliders[i]);
+function setupPlotBrowser(browser) {
+    var slider = browser.getElementsByClassName("plot-selector-slider")[0];
+    var frames = browser.getElementsByClassName("plot-frame");
+    var counter = browser.getElementsByClassName("plot-counter")[0];
+    var title = browser.getElementsByClassName("plot-title")[0];
+
+    if (!slider || frames.length === 0) {
+        return;
     }
 
-    updateResultSliders();
+    slider.max = frames.length - 1;
+    slider.addEventListener("input", function() {
+        showSelectedPlot(browser);
+    });
+    showSelectedPlot(browser);
 }
 
-function updateResultSliders() {
-    var sliders = document.getElementsByClassName("result-scroll-slider");
+function showSelectedPlot(browser) {
+    var slider = browser.getElementsByClassName("plot-selector-slider")[0];
+    var frames = browser.getElementsByClassName("plot-frame");
+    var counter = browser.getElementsByClassName("plot-counter")[0];
+    var title = browser.getElementsByClassName("plot-title")[0];
+    var index = Math.max(0, Math.min(Number(slider.value), frames.length - 1));
     var i;
 
-    for (i = 0; i != sliders.length; i++) {
-        var slider = sliders[i];
-        var wrapper = slider.parentElement.parentElement.nextElementSibling;
-        if (!wrapper || wrapper.className.indexOf("result-table-scroll") === -1) {
-            continue;
-        }
+    slider.value = index;
+    for (i = 0; i != frames.length; i++) {
+        frames[i].classList.toggle("active-plot", i === index);
+    }
 
-        slider.value = 0;
+    if (counter) {
+        counter.textContent = (index + 1) + " / " + frames.length;
+    }
+    if (title) {
+        title.textContent = frames[index].getAttribute("data-plot-title") || "";
+    }
+
+    updatePanelHeight(browser.closest(".panel"));
+}
+
+function updatePanelHeight(panel) {
+    if (panel && panel.style.maxHeight) {
+        panel.style.maxHeight = panel.scrollHeight + "px";
     }
 }
