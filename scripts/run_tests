@@ -1117,8 +1117,10 @@ update_branch_selector_page() {
     local ok_arch=0
     local nok_arch=0
     local branch_name branch_label label_file arch_dir arch_name index_org row
+    local row_html
     local _ date_col build_col unit_col regression_col __
     local unit_status regression_status
+    local -r rows_tmp=$(mktemp "/tmp/overview_rows.XXXXXX")
 
     for branch_name in "${branch_dirs[@]}"; do
         while IFS= read -r arch_dir; do
@@ -1189,6 +1191,7 @@ update_branch_selector_page() {
             '      <table class="runs">' \
             '        <thead><tr><th>Branch</th><th>Architecture</th><th>Latest run</th><th>Build</th><th>Unit</th><th>Regression</th><th>Artifacts</th></tr></thead>' \
             '        <tbody>'
+        : > "${rows_tmp}"
         for branch_name in "${branch_dirs[@]}"; do
             label_file="${overview_dir}/${branch_name}/branch-name.txt"
             branch_label="${branch_name}"
@@ -1209,7 +1212,7 @@ update_branch_selector_page() {
                 build_col=$(strip_org_link_text "${build_col}")
                 unit_status=$(test_status_class "${unit_col}")
                 regression_status=$(test_status_class "${regression_col}")
-                printf '          <tr><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s/%s</span></td><td><span class="badge %s">%s/%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>\n' \
+                printf -v row_html '          <tr><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s/%s</span></td><td><span class="badge %s">%s/%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>' \
                     "${branch_label}" \
                     "${arch_name}" \
                     "${date_col}" \
@@ -1217,7 +1220,11 @@ update_branch_selector_page() {
                     "${unit_status}" "$(run_count_value "${unit_col}" "passed")" "$(run_count_value "${unit_col}" "total")" \
                     "${regression_status}" "$(run_count_value "${regression_col}" "passed")" "$(run_count_value "${regression_col}" "total")" \
                     "${branch_name}" "${arch_name}"
+                printf '%s\t%s\n' "${date_col}" "${row_html}" >> "${rows_tmp}"
             done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
+        done
+        sort -r -t $'\t' -k1,1 "${rows_tmp}" | while IFS=$'\t' read -r _ row_html; do
+            printf '%s\n' "${row_html}"
         done
         printf '%s\n' \
             '        </tbody>' \
@@ -1227,6 +1234,7 @@ update_branch_selector_page() {
             '</body>' \
             '</html>'
     } > "${selector_html}"
+    rm -f "${rows_tmp}"
     perl -0pi -e 's/[ \t]+\n/\n/g' "${selector_html}"
 }
 
