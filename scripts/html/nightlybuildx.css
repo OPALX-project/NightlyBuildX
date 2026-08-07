@@ -300,6 +300,30 @@ th {
     font-size: 0.82rem;
 }
 
+.table-pager {
+    align-items: center;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: flex-end;
+}
+
+.table-pager button {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--blue);
+    cursor: pointer;
+    font-weight: 650;
+    min-height: 34px;
+    padding: 0.4rem 0.7rem;
+}
+
+.table-pager button:disabled {
+    color: var(--muted);
+    cursor: default;
+    opacity: 0.55;
+}
+
 .mono {
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 0.86rem;

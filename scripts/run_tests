@@ -1169,12 +1169,12 @@ update_branch_selector_page() {
             '      <div><h1>Browse Existing Results</h1><div class="hint">Selections only open already published branch and architecture pages.</div></div>' \
             '    </div>' \
             '    <div class="filters">' \
-            '      <div class="field"><label for="branchSelect">OPALX branch</label><select id="branchSelect" onchange="if (this.value) window.location.href = this.value;"><option value="">Select a branch...</option>'
+            '      <div class="field"><label for="branchSelect">OPALX branch</label><select id="branchSelect"><option value="">All branches</option>'
         for branch_name in "${branch_dirs[@]}"; do
             label_file="${overview_dir}/${branch_name}/branch-name.txt"
             branch_label="${branch_name}"
             [[ -f "${label_file}" ]] && branch_label=$(<"${label_file}")
-            printf '        <option value="%s/index.html">%s</option>\n' "${branch_name}" "${branch_label}"
+            printf '        <option value="%s">%s</option>\n' "${branch_name}" "${branch_label}"
         done
         printf '%s\n' \
             '      </select></div>' \
@@ -1212,7 +1212,8 @@ update_branch_selector_page() {
                 build_col=$(strip_org_link_text "${build_col}")
                 unit_status=$(test_status_class "${unit_col}")
                 regression_status=$(test_status_class "${regression_col}")
-                printf -v row_html '          <tr><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s/%s</span></td><td><span class="badge %s">%s/%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>' \
+                printf -v row_html '          <tr data-branch="%s"><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s/%s</span></td><td><span class="badge %s">%s/%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>' \
+                    "${branch_name}" \
                     "${branch_label}" \
                     "${arch_name}" \
                     "${date_col}" \
@@ -1229,8 +1230,44 @@ update_branch_selector_page() {
         printf '%s\n' \
             '        </tbody>' \
             '      </table>' \
+            '      <div class="table-pager" id="publishedRunsPager">' \
+            '        <button type="button" id="publishedRunsPrev">Previous</button>' \
+            '        <span id="publishedRunsStatus" class="hint"></span>' \
+            '        <button type="button" id="publishedRunsNext">Next</button>' \
+            '      </div>' \
             '    </section>' \
             '  </main>' \
+            '  <script>' \
+            '    (function () {' \
+            '      var pageSize = 9;' \
+            '      var page = 0;' \
+            '      var branchSelect = document.getElementById("branchSelect");' \
+            '      var rows = Array.prototype.slice.call(document.querySelectorAll(".runs tbody tr"));' \
+            '      var prev = document.getElementById("publishedRunsPrev");' \
+            '      var next = document.getElementById("publishedRunsNext");' \
+            '      var status = document.getElementById("publishedRunsStatus");' \
+            '      function matchingRows() {' \
+            '        var branch = branchSelect ? branchSelect.value : "";' \
+            '        return rows.filter(function (row) { return !branch || row.getAttribute("data-branch") === branch; });' \
+            '      }' \
+            '      function renderRuns() {' \
+            '        var visible = matchingRows();' \
+            '        var pageCount = Math.max(1, Math.ceil(visible.length / pageSize));' \
+            '        if (page >= pageCount) page = pageCount - 1;' \
+            '        var start = page * pageSize;' \
+            '        var end = start + pageSize;' \
+            '        rows.forEach(function (row) { row.hidden = true; });' \
+            '        visible.slice(start, end).forEach(function (row) { row.hidden = false; });' \
+            '        if (status) status.textContent = visible.length ? "Showing " + (start + 1) + "-" + Math.min(end, visible.length) + " of " + visible.length : "No published runs";' \
+            '        if (prev) prev.disabled = page === 0;' \
+            '        if (next) next.disabled = page >= pageCount - 1;' \
+            '      }' \
+            '      if (branchSelect) branchSelect.addEventListener("change", function () { page = 0; renderRuns(); });' \
+            '      if (prev) prev.addEventListener("click", function () { if (page > 0) { page -= 1; renderRuns(); } });' \
+            '      if (next) next.addEventListener("click", function () { page += 1; renderRuns(); });' \
+            '      renderRuns();' \
+            '    }());' \
+            '  </script>' \
             '</body>' \
             '</html>'
     } > "${selector_html}"
