@@ -118,6 +118,69 @@ Use render-only mode to refresh the published dashboard from existing data:
 
 For `opal-live-doc`, commit and push the generated files after review. The Pages pipeline renders the published site from the pushed repository content.
 
+## Cleanup Published Results
+
+NightlyBuildX can clean the current published result tree before committing it to `opal-live-doc`. This removes files from the current repository checkout only; it does not rewrite Git history and it does not push.
+
+Cleanup is dry-run by default:
+
+```bash
+./scripts/run_tests \
+    --publish-dir /path/to/opal-live-doc/docs/opalx-regression-test \
+    --cleanup-repo-to 2025-12-01
+```
+
+Dates must use ISO format `YYYY-MM-DD`. Ambiguous formats such as `12-01-2025` are rejected.
+
+Apply date-based cleanup with:
+
+```bash
+./scripts/run_tests \
+    --publish-dir /path/to/opal-live-doc/docs/opalx-regression-test \
+    --cleanup-repo-to 2025-12-01 \
+    --cleanup-apply
+```
+
+This deletes published artifacts up to and including the selected date:
+
+```text
+regressionTests/<branch>/<architecture>/results_YYYY-MM-DD_HH-MM.html
+regressionTests/<branch>/<architecture>/results_YYYY-MM-DD_HH-MM.xml
+regressionTests/<branch>/<architecture>/plots_YYYY-MM-DD_HH-MM/
+unitTests/<branch>/<architecture>/results_YYYY-MM-DD_HH-MM.txt
+output/<branch>/<architecture>/YYYY-MM-DD_HH-MM.txt
+```
+
+It also removes matching rows from `overview/<branch>/<architecture>/index.org` and regenerates the overview HTML pages.
+
+Delete published branch trees with:
+
+```bash
+./scripts/run_tests \
+    --publish-dir /path/to/opal-live-doc/docs/opalx-regression-test \
+    --delete-branches a1,s2,d3 \
+    --cleanup-apply
+```
+
+This removes:
+
+```text
+overview/<branch>/
+regressionTests/<branch>/
+unitTests/<branch>/
+output/<branch>/
+```
+
+Review and publish from the `opal-live-doc` checkout:
+
+```bash
+git status
+git diff --stat
+git add docs/opalx-regression-test
+git commit -m "cleanup old opalx regression results"
+git push
+```
+
 ## Production Wrapper Example
 
 On `merlin6`, the cron-style wrapper `~/bin/runOPALX-reg-test` shows how the scripts are normally composed for published nightly output. The wrapper keeps the site and NightlyBuildX checkouts current, chooses branches, runs both GPU and CPU configurations, and then publishes the regenerated `opal-live-doc` content.

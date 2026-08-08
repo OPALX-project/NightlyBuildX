@@ -162,6 +162,24 @@ OPTIONS:
 	architecture, or result names. This is intended for testing the
 	pushed opal-live-doc result GUI on already available nightly data.
 
+--cleanup-repo-to=YYYY-MM-DD
+	Delete published unit-test, regression-test, output, plot, and overview
+	entries up to and including the ISO date under --publish-dir. This
+	operates on the current published repository tree only; it does not
+	rewrite Git history or push.
+
+--delete-branches=BRANCH1,BRANCH2
+	Delete published branch trees under overview, regressionTests,
+	unitTests, and output. This deletes published result branches, not Git
+	branches.
+
+--cleanup-dry-run
+	Print what cleanup would delete. This is the default for cleanup modes.
+
+--cleanup-apply
+	Actually delete files/directories and regenerate published overview
+	pages. Without this option cleanup modes are read-only dry runs.
+
 -f | --force
 	Force compiling OPAL and run unit- and regression-tests.
 
@@ -194,6 +212,10 @@ declare do_run_local_now='no'
 declare do_no_gpl='no'
 declare do_generate_web_page='no'
 declare do_not_compile_run='no'
+declare do_cleanup_repo='no'
+declare cleanup_apply='no'
+declare cleanup_repo_to=''
+declare cleanup_delete_branches=''
 declare clean_after_compile='yes'
 declare explicit_actions='no'
 
@@ -316,6 +338,36 @@ while (( $# > 0 )); do
             do_unittests='no'
             do_regtests='no'
             ;;
+        --cleanup-repo-to|--cleanup-repo-to=* )
+            explicit_actions='yes'
+            do_cleanup_repo='yes'
+            do_compile='no'
+            do_unittests='no'
+            do_regtests='no'
+            if [[ $1 == *=* ]]; then
+                cleanup_repo_to="${1#*=}"
+            else
+                cleanup_repo_to="$2"; shift 1
+            fi
+            ;;
+        --delete-branches|--delete-branches=* )
+            explicit_actions='yes'
+            do_cleanup_repo='yes'
+            do_compile='no'
+            do_unittests='no'
+            do_regtests='no'
+            if [[ $1 == *=* ]]; then
+                cleanup_delete_branches="${1#*=}"
+            else
+                cleanup_delete_branches="$2"; shift 1
+            fi
+            ;;
+        --cleanup-dry-run )
+            cleanup_apply='no'
+            ;;
+        --cleanup-apply )
+            cleanup_apply='yes'
+            ;;
         --unit-tests )
             explicit_actions='yes'
             do_unittests='yes'
@@ -357,7 +409,7 @@ if [[ -n "${opt_single_regtest}" ]]; then
     tests=( "${opt_single_regtest}" )
 fi
 
-if [[ -n "${publish_dir}" ]]; then
+if [[ -n "${publish_dir}" && "${do_cleanup_repo}" != 'yes' ]]; then
     mkdir -p "${publish_dir}"
 fi
 
@@ -1297,6 +1349,169 @@ regenerate_published_regression_results_for_branch() {
     done < <(find "${published_regtests_dir}" -maxdepth 1 -type d ! -path "${published_regtests_dir}" | sort)
 }
 
+validate_iso_date() {
+    local -r value="$1"
+    [[ "${value}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || \
+        die ${EC_ARG_ERROR} "ERROR: cleanup date must use ISO format YYYY-MM-DD - got '${value}'"
+    python3 -c 'import datetime, sys; datetime.date.fromisoformat(sys.argv[1])' "${value}" 2>/dev/null || \
+        die ${EC_ARG_ERROR} "ERROR: invalid cleanup date - ${value}"
+}
+
+cleanup_print_or_delete() {
+    local -r path="$1"
+    [[ -e "${path}" ]] || return 0
+
+    if [[ "${cleanup_apply}" == 'yes' ]]; then
+        printf 'Delete: %s\n' "${path}"
+        rm -rf "${path}"
+    else
+        printf 'Would delete: %s\n' "${path}"
+    fi
+}
+
+cleanup_delete_branch_tree() {
+    local branch_name="$1"
+    branch_name=$(trim_text "${branch_name}")
+    [[ -n "${branch_name}" ]] || return 0
+
+    local branch_dir
+    branch_dir=$(sanitize_path_component "${branch_name}")
+    printf "Cleanup published branch: %s (%s)\n" "${branch_name}" "${branch_dir}"
+
+    cleanup_print_or_delete "${publish_dir}/overview/${branch_dir}"
+    cleanup_print_or_delete "${publish_dir}/regressionTests/${branch_dir}"
+    cleanup_print_or_delete "${publish_dir}/unitTests/${branch_dir}"
+    cleanup_print_or_delete "${publish_dir}/output/${branch_dir}"
+}
+
+cleanup_delete_requested_branches() {
+    [[ -n "${cleanup_delete_branches}" ]] || return 0
+
+    local -a cleanup_branch_names=()
+    local branch_name
+    IFS=',' read -ra cleanup_branch_names <<< "${cleanup_delete_branches}"
+    for branch_name in "${cleanup_branch_names[@]}"; do
+        cleanup_delete_branch_tree "${branch_name}"
+    done
+}
+
+cleanup_date_from_basename() {
+    local -r name="$1"
+    if [[ "${name}" =~ ^results_([0-9]{4}-[0-9]{2}-[0-9]{2})_[0-9]{2}-[0-9]{2}\.(html|xml|txt)$ ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    elif [[ "${name}" =~ ^plots_([0-9]{4}-[0-9]{2}-[0-9]{2})_[0-9]{2}-[0-9]{2}$ ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    elif [[ "${name}" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})_[0-9]{2}-[0-9]{2}\.txt$ ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    fi
+}
+
+cleanup_delete_artifacts_to_date() {
+    [[ -n "${cleanup_repo_to}" ]] || return 0
+    validate_iso_date "${cleanup_repo_to}"
+
+    local root path name item_date
+    for root in "${publish_dir}/regressionTests" "${publish_dir}/unitTests" "${publish_dir}/output"; do
+        [[ -d "${root}" ]] || continue
+        while IFS= read -r path; do
+            name=$(basename "${path}")
+            item_date=$(cleanup_date_from_basename "${name}")
+            [[ -n "${item_date}" ]] || continue
+            if [[ "${item_date}" < "${cleanup_repo_to}" || "${item_date}" == "${cleanup_repo_to}" ]]; then
+                cleanup_print_or_delete "${path}"
+            fi
+        done < <(find "${root}" -mindepth 1 \( -type f -o -type d \) | sort)
+    done
+}
+
+cleanup_prune_overview_rows_to_date() {
+    [[ -n "${cleanup_repo_to}" ]] || return 0
+
+    local index_org tmpfile
+    while IFS= read -r index_org; do
+        if [[ "${cleanup_apply}" != 'yes' ]]; then
+            awk -v cutoff="${cleanup_repo_to}" '
+                /^\| [0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+                    date = substr($0, 3, 10)
+                    if (date <= cutoff) count++
+                }
+                END {
+                    if (count > 0) {
+                        printf("Would remove %d overview row(s): %s\n", count, FILENAME)
+                    }
+                }
+            ' "${index_org}"
+            continue
+        fi
+
+        tmpfile=$(mktemp "/tmp/overview-prune.XXXXXX")
+        awk -v cutoff="${cleanup_repo_to}" '
+            /^\| [0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+                date = substr($0, 3, 10)
+                if (date <= cutoff) next
+            }
+            { print }
+        ' "${index_org}" > "${tmpfile}"
+        mv "${tmpfile}" "${index_org}"
+    done < <(find "${publish_dir}/overview" -mindepth 3 -maxdepth 3 -type f -name index.org 2>/dev/null | sort)
+}
+
+cleanup_remove_empty_published_dirs() {
+    [[ "${cleanup_apply}" == 'yes' ]] || return 0
+
+    local root
+    for root in "${publish_dir}/regressionTests" "${publish_dir}/unitTests" "${publish_dir}/output"; do
+        [[ -d "${root}" ]] || continue
+        find "${root}" -depth -type d -empty -delete
+    done
+}
+
+regenerate_all_published_overviews() {
+    [[ -n "${publish_dir}" ]] || return 0
+    [[ -d "${publish_dir}/overview" ]] || return 0
+
+    local branch_dir arch_dir index_org label_file
+    while IFS= read -r branch_dir; do
+        branch_slug=$(basename "${branch_dir}")
+        branch="${branch_slug}"
+        label_file="${branch_dir}/branch-name.txt"
+        [[ -f "${label_file}" ]] && branch=$(<"${label_file}")
+
+        while IFS= read -r arch_dir; do
+            architecture=$(basename "${arch_dir}")
+            index_org="${arch_dir}/index.org"
+            [[ -f "${index_org}" ]] || continue
+            refresh_architecture_overview_layout "${index_org}"
+            render_org_page "${index_org}" "OPALX"
+        done < <(find "${branch_dir}" -maxdepth 1 -type d ! -path "${branch_dir}" | sort)
+
+        update_master_landing_page
+    done < <(find "${publish_dir}/overview" -maxdepth 1 -type d ! -path "${publish_dir}/overview" | sort)
+
+    update_branch_selector_page
+}
+
+cleanup_published_repo() {
+    [[ -n "${publish_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: cleanup requires --publish-dir"
+    [[ -d "${publish_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: publish directory does not exist - ${publish_dir}"
+    [[ -n "${cleanup_repo_to}${cleanup_delete_branches}" ]] || \
+        die ${EC_ARG_ERROR} "ERROR: cleanup requested without --cleanup-repo-to or --delete-branches"
+
+    printf "Cleanup mode: %s\n" "$([[ "${cleanup_apply}" == 'yes' ]] && printf apply || printf dry-run)"
+    printf "Publish directory: %s\n" "${publish_dir}"
+
+    cleanup_delete_requested_branches
+    cleanup_delete_artifacts_to_date
+    cleanup_prune_overview_rows_to_date
+
+    if [[ "${cleanup_apply}" == 'yes' ]]; then
+        cleanup_remove_empty_published_dirs
+        regenerate_all_published_overviews
+    else
+        printf "Dry run only. Re-run with --cleanup-apply to delete files and regenerate overview pages.\n"
+    fi
+}
+
 run_current_branch() {
     set_branch_context
     reset_results
@@ -1403,6 +1618,11 @@ run_current_branch() {
 main() {
     local -a branches=()
     local default_branches_file="${HOME}/branches.txt"
+    if [[ "${do_cleanup_repo}" == 'yes' ]]; then
+        cleanup_published_repo
+        return 0
+    fi
+
     if [[ "${do_not_compile_run}" == 'yes' && -z "${publish_dir}" ]]; then
         die ${EC_ARG_ERROR} "ERROR: --doNotCompileRun requires --publish-dir"
     fi
