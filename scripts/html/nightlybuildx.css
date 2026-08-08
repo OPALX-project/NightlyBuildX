@@ -395,6 +395,10 @@ th {
     background: var(--amber);
 }
 
+.badge.reused::before {
+    background: var(--blue);
+}
+
 .run-date,
 .muted {
     color: var(--muted);

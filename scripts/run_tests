@@ -218,6 +218,7 @@ declare cleanup_repo_to=''
 declare cleanup_delete_branches=''
 declare clean_after_compile='yes'
 declare explicit_actions='no'
+declare compile_requested='no'
 
 # configuration file
 declare	opt_config_file="default-${branch}.conf"
@@ -298,6 +299,7 @@ while (( $# > 0 )); do
             ;;
 		--compile )
             explicit_actions='yes'
+			compile_requested='yes'
 			do_compile='yes'
 			;;
         --no-clean-after-compile )
@@ -466,6 +468,10 @@ result_r_failed="-"
 result_r_disabled="-"
 result_r_broken="-"
 
+# Reused publication state (non-master automatic nightly runs only).
+declare reuse_previous_run='no'
+declare reused_timestamp=''
+
 sanitize_path_component() {
     local value="$1"
     value="${value//\//_}"
@@ -499,6 +505,147 @@ reset_results() {
     result_r_failed="-"
     result_r_disabled="-"
     result_r_broken="-"
+    reuse_previous_run='no'
+    reused_timestamp=''
+}
+
+join_state_values() {
+    local IFS=$'\034'
+    printf '%s' "$*"
+}
+
+current_run_state_file() {
+    printf '%s/overview/%s/%s/run-state.json' "${publish_dir}" "${branch_slug}" "${architecture}"
+}
+
+write_current_run_inputs() {
+    local -r output_file="$1"
+    local opalx_commit regression_commit nightlybuild_commit run_host
+    opalx_commit=$(git -C "${srcdir}" rev-parse HEAD)
+    regression_commit=$(git -C "${testsbase}" rev-parse HEAD)
+    nightlybuild_commit=$(git -C "${prefix}" rev-parse HEAD)
+    run_host=$(hostname -s 2>/dev/null || hostname)
+
+    python3 - "${output_file}" \
+        "${branch}" "${architecture}" "${opalx_commit}" \
+        "${regtests_branch}" "${regression_commit}" \
+        "${nightlybuild_commit}" "${run_host}" "${do_no_gpl}" \
+        "${opt_config_file}" \
+        "$(join_state_values "${cmake_args[@]}")" \
+        "$(join_state_values "${opalx_args[@]}")" \
+        "$(join_state_values "${unittests_args[@]}")" \
+        "$(join_state_values "${tests[@]}")" <<'PY'
+import json
+import sys
+
+separator = "\x1c"
+
+def values(text):
+    return [] if not text else text.split(separator)
+
+state = {
+    "inputs": {
+        "opalxBranch": sys.argv[2],
+        "architecture": sys.argv[3],
+        "opalxCommit": sys.argv[4],
+        "regressionTestsBranch": sys.argv[5],
+        "regressionTestsCommit": sys.argv[6],
+        "nightlyBuildCommit": sys.argv[7],
+        "host": sys.argv[8],
+        "plotBackend": "matplotlib" if sys.argv[9] == "yes" else "gnuplot",
+        "configFile": sys.argv[10],
+        "cmakeArgs": values(sys.argv[11]),
+        "opalxArgs": values(sys.argv[12]),
+        "unitTestArgs": values(sys.argv[13]),
+        "selectedTests": values(sys.argv[14]),
+    }
+}
+
+with open(sys.argv[1], "w", encoding="utf-8") as stream:
+    json.dump(state, stream, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+}
+
+can_reuse_previous_run() {
+    [[ "${branch}" != 'master' ]] || return 1
+    [[ "${opt_force}" == 'no' ]] || return 1
+    [[ "${compile_requested}" == 'no' ]] || return 1
+    [[ "${do_run_local_now}" == 'no' && "${do_generate_web_page}" == 'no' ]] || return 1
+    [[ ${#tests[@]} -eq 0 ]] || return 1
+    if [[ "${explicit_actions}" == 'yes' ]]; then
+        [[ "${do_unittests}" == 'yes' && "${do_regtests}" == 'yes' ]] || return 1
+    fi
+    [[ -n "${publish_dir}" ]] || return 1
+
+    local -r state_file=$(current_run_state_file)
+    [[ -f "${state_file}" ]] || return 1
+
+    local current_inputs
+    current_inputs=$(mktemp "/tmp/opalx-run-inputs.XXXXXX")
+    write_current_run_inputs "${current_inputs}"
+
+    reused_timestamp=$(python3 - "${state_file}" "${current_inputs}" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        previous = json.load(stream)
+    with open(sys.argv[2], encoding="utf-8") as stream:
+        current = json.load(stream)
+except (OSError, ValueError):
+    raise SystemExit(1)
+
+if previous.get("status") != "passed":
+    raise SystemExit(1)
+if previous.get("inputs") != current.get("inputs"):
+    raise SystemExit(1)
+
+timestamp = previous.get("resultTimestamp", "")
+if not timestamp:
+    raise SystemExit(1)
+print(timestamp)
+PY
+    ) || {
+        rm -f "${current_inputs}"
+        reused_timestamp=''
+        return 1
+    }
+    rm -f "${current_inputs}"
+
+    [[ -f "${publish_dir}/unitTests/${branch_slug}/${architecture}/results_${reused_timestamp}.txt" ]] || return 1
+    [[ -f "${publish_dir}/regressionTests/${branch_slug}/${architecture}/results_${reused_timestamp}.html" ]] || return 1
+    return 0
+}
+
+record_successful_run_state() {
+    [[ -n "${publish_dir}" ]] || return 0
+    [[ "${result_u_total}" != '-' && "${result_r_total}" != '-' ]] || return 0
+    [[ "${result_u_failed}" == '0' && "${result_r_failed}" == '0' ]] || return 0
+    [[ "${result_u_broken}" == '-' || "${result_u_broken}" == '0' ]] || return 0
+    [[ "${result_r_broken}" == '-' || "${result_r_broken}" == '0' ]] || return 0
+
+    local -r state_file=$(current_run_state_file)
+    local state_dir tmp_state
+    state_dir=$(dirname "${state_file}")
+    mkdir -p "${state_dir}"
+    tmp_state=$(mktemp "/tmp/opalx-run-state.XXXXXX")
+    write_current_run_inputs "${tmp_state}"
+
+    python3 - "${tmp_state}" "${timestamp}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    state = json.load(stream)
+state["status"] = "passed"
+state["resultTimestamp"] = sys.argv[2]
+with open(sys.argv[1], "w", encoding="utf-8") as stream:
+    json.dump(state, stream, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+    mv "${tmp_state}" "${state_file}"
 }
 
 read_branches_file() {
@@ -845,8 +992,10 @@ update_overview() {
 
     # links to generated XML pages used in the table
     # Adjusted relative paths from overview directory
-    local -r u_results_html="../../../unitTests/${branch_slug}/${architecture}/results_${timestamp}.txt"
-    local -r r_results_html="../../../regressionTests/${branch_slug}/${architecture}/results_${timestamp}.html"
+    local result_timestamp="${timestamp}"
+    [[ "${reuse_previous_run}" == 'yes' ]] && result_timestamp="${reused_timestamp}"
+    local -r u_results_html="../../../unitTests/${branch_slug}/${architecture}/results_${result_timestamp}.txt"
+    local -r r_results_html="../../../regressionTests/${branch_slug}/${architecture}/results_${result_timestamp}.html"
 
     local time_col
     local ofile="${publish_dir}/output/${branch_slug}/${architecture}/${timestamp}.txt"
@@ -856,8 +1005,13 @@ update_overview() {
         time_col="${today} ${time/-/:}"
     fi
 
-    # build string with result for unit-tests. This will be used as link-name.
-    if [[ "${result_u_total}" == "-" ]]; then
+    # Reused rows point to the previous real result files without duplicating artifacts.
+    if [[ "${reuse_previous_run}" == 'yes' ]]; then
+        local -r reused_label="unchanged; results from ${reused_timestamp/_/ }"
+        local -r u_report="[[${u_results_html}][${reused_label}]]"
+        local -r r_report="[[${r_results_html}][${reused_label}]]"
+        result_compile='unchanged'
+    elif [[ "${result_u_total}" == "-" ]]; then
         local -r u_report='-'
     else
         local -r u_t="total:${result_u_total}"
@@ -868,7 +1022,9 @@ update_overview() {
         local -r u_report="[[${u_results_html}][${u_t}; ${u_p}; ${u_f}; ${u_d}; ${u_b}]]"
     fi
     # build string with result for regression-tests. This will be used as link-name.
-    if [[ "${result_r_total}" == "-" ]]; then
+    if [[ "${reuse_previous_run}" == 'yes' ]]; then
+        : # r_report was set with the reused unit-test report above.
+    elif [[ "${result_r_total}" == "-" ]]; then
         local -r r_report='-'
     else
         local -r r_t="total:${result_r_total}"
@@ -1090,6 +1246,8 @@ test_status_class() {
 
     if [[ -z "${report}" || "${report}" == "-" ]]; then
         printf "skip"
+    elif [[ "${report}" == *"unchanged; results from "* || "${report}" == "unchanged" ]]; then
+        printf "reused"
     elif [[ "${report}" == "ok" ]]; then
         printf "ok"
     elif [[ "${report}" == "failed" || "${report}" == "nok" ]]; then
@@ -1106,8 +1264,18 @@ test_status_label() {
     case "${status_value}" in
         ok) printf "ok" ;;
         nok) printf "nok" ;;
+        reused) printf "reused" ;;
         *) printf "-" ;;
     esac
+}
+
+test_summary_label() {
+    local -r report="$1"
+    if [[ "$(test_status_class "${report}")" == 'reused' ]]; then
+        printf "reused"
+    else
+        printf '%s/%s' "$(run_count_value "${report}" "passed")" "$(run_count_value "${report}" "total")"
+    fi
 }
 
 branch_architecture_checks_html() {
@@ -1185,7 +1353,8 @@ update_branch_selector_page() {
                 date_col=$(strip_org_link_text "${date_col}")
                 unit_status=$(test_status_class "${unit_col}")
                 regression_status=$(test_status_class "${regression_col}")
-                if [[ "${unit_status}" == "ok" && "${regression_status}" == "ok" ]]; then
+                if [[ ( "${unit_status}" == "ok" || "${unit_status}" == "reused" ) && \
+                      ( "${regression_status}" == "ok" || "${regression_status}" == "reused" ) ]]; then
                     ok_arch=$((ok_arch + 1))
                 else
                     nok_arch=$((nok_arch + 1))
@@ -1264,14 +1433,14 @@ update_branch_selector_page() {
                 build_col=$(strip_org_link_text "${build_col}")
                 unit_status=$(test_status_class "${unit_col}")
                 regression_status=$(test_status_class "${regression_col}")
-                printf -v row_html '          <tr data-branch="%s"><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s/%s</span></td><td><span class="badge %s">%s/%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>' \
+                printf -v row_html '          <tr data-branch="%s"><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>' \
                     "${branch_name}" \
                     "${branch_label}" \
                     "${arch_name}" \
                     "${date_col}" \
                     "$(test_status_class "${build_col}")" "$(trim_text "${build_col}")" \
-                    "${unit_status}" "$(run_count_value "${unit_col}" "passed")" "$(run_count_value "${unit_col}" "total")" \
-                    "${regression_status}" "$(run_count_value "${regression_col}" "passed")" "$(run_count_value "${regression_col}" "total")" \
+                    "${unit_status}" "$(test_summary_label "${unit_col}")" \
+                    "${regression_status}" "$(test_summary_label "${regression_col}")" \
                     "${branch_name}" "${arch_name}"
                 printf '%s\t%s\n' "${date_col}" "${row_html}" >> "${rows_tmp}"
             done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
@@ -1580,6 +1749,22 @@ run_current_branch() {
         # If the binary does not exist we need to compile
         [[ -e ${opalxbin} ]] || do_compile='yes'
     fi
+
+    # Both repositories must be current before deciding whether an automatic
+    # non-master nightly run has identical inputs to its last successful run.
+    if [[ "${do_regtests}" == 'yes' || "${explicit_actions}" == 'no' ]]; then
+        printf "\nUpdating regression tests repository...\n"
+        update_repo "${testsbase}" "${regtests_branch}" "${tests_repo_url}" && do_regtests='yes'
+    fi
+
+	if can_reuse_previous_run; then
+        printf "\nInputs unchanged; reusing published results from %s\n" "${reused_timestamp}"
+        reuse_previous_run='yes'
+		aborting='no'
+        overview_dirty='yes'
+        update_overview
+        return 0
+    fi
 	aborting='no'
     overview_dirty='yes'
  
@@ -1599,18 +1784,13 @@ run_current_branch() {
         run_unittests || true
     fi
 
-    # Regression test
-    if [[ "${do_regtests}" == 'yes' || "${explicit_actions}" == 'no' ]]; then
-        printf "\nUpdating regression tests repository...\n"
-	    update_repo "${testsbase}" "${regtests_branch}" "${tests_repo_url}" && do_regtests='yes'
-    fi
-
     if [[ ${do_regtests} == 'yes' ]]; then
         printf "\nRunning regression tests for OPALX\n"
         run_regressiontests || ec=$?
     fi
 
     update_overview
+    record_successful_run_state
     clean_build_artifacts
     return ${ec}
 }

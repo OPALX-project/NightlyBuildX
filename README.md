@@ -92,6 +92,27 @@ Delete `gui/run-history.json` for a clean Results Browser history. Published XML
     result names are preserved. This is useful for testing the pushed
     `opal-live-doc` result GUI on already available nightly data.
 
+### Reusing Unchanged Branch Results
+
+Automatic nightly runs always build and test `master`. For another OPALX
+branch, `scripts/run_tests` reuses the last successful published result when
+all recorded inputs are unchanged. Unit and regression tests are treated as
+one run; they are not reused independently.
+
+The compared values are stored explicitly in
+`overview/<branch>/<architecture>/run-state.json`: OPALX and regression-test
+branches and commits, NightlyBuildX commit, host, architecture, plotting
+backend, configuration name, test selection, and build/test arguments. No
+combined fingerprint hash is used.
+
+When those values match, no compilation or tests are performed and no new
+PNG, XML, result log, or result page is published. The overview receives an
+`unchanged` row whose unit- and regression-test links open the previous real
+result files. Failed, incomplete, or missing results are never reused.
+The production-style combination `--unit-tests --reg-tests` remains eligible
+for reuse because it requests the complete combined suite. `--force`,
+`--compile`, single-test runs, and requests for only one suite bypass reuse.
+
 ## Published Results GUI
 
 The published HTML under `<publish-dir>/overview` and `<publish-dir>/regressionTests` is a read-only browser for data from already completed nightly or local runs. It does not configure, compile, or start simulations. Those actions remain controlled by `scripts/run_tests`, the local OPALX Lab GUI, wrapper scripts, or cron jobs.
