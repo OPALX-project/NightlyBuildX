@@ -103,12 +103,18 @@ class OpalRegressionTests:
             return (result.stdout or "").strip() if result.returncode == 0 else ""
 
     def _getRevisionOpalx(self):
-        exe = os.path.join(os.getenv("OPALX_EXE_PATH", ""), "opalx")
-        if sys.version_info < (3,0):
+        # Prefer an explicit source directory (set by CI when the executable
+        # comes from a pre-built artifact and the heuristic below would fail).
+        src_dir = os.getenv("OPALX_SRC_DIR", "")
+        if not src_dir:
+            exe = os.path.join(os.getenv("OPALX_EXE_PATH", ""), "opalx")
             src_dir = os.path.abspath(os.path.join(os.path.dirname(exe), "..", "..", "..", "src"))
+
+        if sys.version_info < (3,0):
             return commands.getoutput("cd " + src_dir + " && git rev-parse HEAD")
         else:
-            src_dir = os.path.abspath(os.path.join(os.path.dirname(exe), "..", "..", "..", "src"))
+            if not os.path.isdir(os.path.join(src_dir, ".git")):
+                return ""
             try:
                 result = subprocess.run(
                     ["git", "rev-parse", "HEAD"],
