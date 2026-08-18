@@ -1,47 +1,29 @@
 #+TITLE: OPALX Regression Tests - Branch '@BRANCH@'
 #+AUTHOR: AMAS - PSI
 #+HTML_HEAD: <style> #content{max-width:2400px;}</style>
-#+HTML_HEAD: <style> p{max-width:1200px;}</style>
-#+HTML_HEAD: <style> li{max-width:1200px;}</style>
-#+HTML_HEAD: <style> h2{margin-top:2em; border-bottom: 2px solid #ddd; padding-bottom: 0.5em;}</style>
+#+HTML_HEAD: <style> .document-title { display: none; }</style>
 #
 
 @@html:
-<style>
-table colgroup col:nth-child(1) {
-    width: 17%;
-}
-table colgroup col:nth-child(2) {
-    width: 5%;
-}
-table colgroup col:nth-child(3) {
-    width: 39%;
-}
-table colgroup col:nth-child(4) {
-    width: 39%;
-}
-.branch-name, .architecture-name {
-    font-family: "Consolas", "Monaco", "Courier New", monospace;
-    font-size: 0.9em;
-    background-color: #f4f4f4;
-    padding: 2px 8px;
-    border-radius: 3px;
-    color: #c7254e;
-    font-weight: 600;
-    border: 1px solid #ddd;
-}
-.author {
-    text-align: left;      /* Change to: left, center, or right */
-    margin-left: 0;        /* Adjust left margin */
-    margin-right: auto;    /* Or set specific value like: 200px */
-}
-</style>
+<header class="topbar">
+  <div class="brand"><strong>OPALX</strong><span>Published Regression Results</span></div>
+  <div class="scope"><span class="readonly">read-only published data</span><span class="muted mono">@BRANCH@</span></div>
+</header>
+<main class="dashboard">
+  <div class="page-head">
+    <div>
+      <h1>Branch Results</h1>
+      <div class="hint">Existing published architecture pages for OPALX branch <span class="mono">@BRANCH@</span>.</div>
+    </div>
+  </div>
+  <div class="summary">
+    <div class="metric"><span>OPALX branch</span><b>@BRANCH@</b><strong>published data</strong></div>
+    <div class="metric"><span>Mode</span><b>read-only</b><strong>no compile or run controls</strong></div>
+    <div class="metric"><span>Navigation</span><b>links</b><strong>architecture pages</strong></div>
+    <div class="metric"><span>Artifacts</span><b>HTML</b><strong>unit, regression, plots</strong></div>
+  </div>
+  <section class="section">
+    <div class="section-head"><h2>Architectures</h2><span class="hint">Open an architecture overview</span></div>
 @@
-
-* Overview - All Architectures
-
-@@html:<p>This page provides an overview of regression test results across all architectures for branch <span class="branch-name">@BRANCH@</span>.</p>@@
-
-** Architecture Quick Links
 
 <!-- ARCHITECTURE_LINKS will be inserted here by update_master_landing_page -->

@@ -11,6 +11,7 @@ declare -ri	EC_ARG_ERROR=1
 declare -ri	EC_GIT_ERROR=10
 
 declare branch="master"
+declare branch_slug="master"
 declare regtests_branch="master"
 declare architecture="cpu-serial"
 
@@ -46,7 +47,9 @@ _exit() {
 	if [[ ${aborting} == 'yes' ]]; then
 		return ${ec}
 	fi
-	update_overview
+    if [[ "${overview_dirty}" == 'yes' ]]; then
+	    update_overview
+    fi
 }
 
 # if errorcode ($1) > 0, then redirect output to 
@@ -87,19 +90,100 @@ OPTIONS:
 
 --config=FILE
 	The options above can be defined in the configuration FILE.
-	Configuration files can also set the 'architecture' variable
+	Configuration files can also set the default 'branch',
+	'regtests_branch', and 'architecture' variables
 	(e.g., cpu-serial, cpu-openmp, gpu-cuda-a100) to organize
 	builds and results by architecture.
+
+--opalx-branch=BRANCH
+	Override the OPALX branch to check out. If not set, the
+	configuration file default is used.
+
+--branches-file=FILE
+	Read OPALX branches to build and test from FILE. When this option
+	is not set, ${HOME}/branches.txt is used if it exists. Empty lines
+	and lines starting with '#' are ignored. --opalx-branch overrides
+	this batch mode.
+
+--opalx-exe-path=DIR
+	Use an existing OPALX executable directory instead of updating and
+	compiling the managed workspace checkout.
+
+--opalx-build-dir=DIR
+	Use an existing OPALX build directory for unit tests and derive the
+	executable from DIR/src/opalx unless --opalx-exe-path is also set.
+
+--regtests-branch=BRANCH
+	Override the regression-tests branch to check out. If not set,
+	the configuration file default is used.
 	
 --compile
 	Compile OPAL even nothing changed and a binary exists.
 
+--no-clean-after-compile
+	Keep build artifacts after a successful compile/test cycle. By
+	default the build tree is cleaned after tests to save storage while
+	preserving the configured build tree.
+
 --unit-tests
 	Run unit-tests even OPAL has not been compiled.
+
+--no-unit-tests
+	Do not run unit tests, overriding the configuration file default.
 
 --reg-tests
 	Run regression-tests even OPAL has not been compiled and the
 	tests has not been changed.
+
+--test[=NAME]
+	Run one regression test only. Without NAME, run Spin-Tracking.
+
+--no-reg-tests
+	Do not run regression tests, overriding the configuration file default.
+
+--no-salloc
+	Do not wrap the regression test runner in salloc/srun even if salloc
+	and sinfo are available. Use this when already running inside a SLURM
+	allocation (e.g. in a CI job).
+
+--run-local-now
+	Skip update/build/run and only generate comparison plots for the
+	local regression test in the current directory.
+
+--no-gpl
+	Use Python plotting instead of gnuplot for regression comparison
+	plots.
+
+--only-generate-web-page
+	If this is the only action flag, run in local compare-only mode
+	without update/build/run and generate the standard regression
+	results HTML/XML page locally. Normal and local compare modes use
+	the same HTML structure and shared styling.
+
+--doNotCompileRun, --do-not-compile-run
+	Do not update repositories, compile OPALX, or run unit/regression
+	tests. Re-render the published overview HTML from existing result
+	files under --publish-dir without rewriting published branch,
+	architecture, or result names. This is intended for testing the
+	pushed opal-live-doc result GUI on already available nightly data.
+
+--cleanup-repo-to=YYYY-MM-DD
+	Delete published unit-test, regression-test, output, plot, and overview
+	entries up to and including the ISO date under --publish-dir. This
+	operates on the current published repository tree only; it does not
+	rewrite Git history or push.
+
+--delete-branches=BRANCH1,BRANCH2
+	Delete published branch trees under overview, regressionTests,
+	unitTests, and output. This deletes published result branches, not Git
+	branches.
+
+--cleanup-dry-run
+	Print what cleanup would delete. This is the default for cleanup modes.
+
+--cleanup-apply
+	Actually delete files/directories and regenerate published overview
+	pages. Without this option cleanup modes are read-only dry runs.
 
 -f | --force
 	Force compiling OPAL and run unit- and regression-tests.
@@ -129,9 +213,29 @@ declare	opt_force='no'
 declare	do_compile='no'
 declare do_unittests='no'
 declare do_regtests='no'
+declare do_run_local_now='no'
+declare do_no_gpl='no'
+declare do_generate_web_page='no'
+declare do_not_compile_run='no'
+declare do_cleanup_repo='no'
+declare cleanup_apply='no'
+declare cleanup_repo_to=''
+declare cleanup_delete_branches=''
+declare clean_after_compile='yes'
+declare explicit_actions='no'
+declare compile_requested='no'
 
 # configuration file
 declare	opt_config_file="default-${branch}.conf"
+declare opt_opalx_branch=""
+declare opt_branches_file=""
+declare opt_branches_file_set='no'
+declare opt_regtests_branch=""
+declare opt_opalx_exe_path=""
+declare opt_opalx_build_dir=""
+declare opt_single_regtest=""
+declare opt_no_salloc='no'
+declare managed_build_layout='yes'
 
 # tests to run, all if non passed as argument
 declare -a tests=()
@@ -163,16 +267,128 @@ while (( $# > 0 )); do
                 publish_dir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${publish_dir}")
             fi
             ;;
+        --opalx-branch|--opalx-branch=* )
+            if [[ $1 == *=* ]]; then
+                opt_opalx_branch="${1#*=}"
+            else
+                opt_opalx_branch="$2"; shift 1
+            fi
+            ;;
+        --branches-file|--branches-file=* )
+            opt_branches_file_set='yes'
+            if [[ $1 == *=* ]]; then
+                opt_branches_file="${1#*=}"
+            else
+                opt_branches_file="$2"; shift 1
+            fi
+            ;;
+        --opalx-exe-path|--opalx-exe-path=* )
+            if [[ $1 == *=* ]]; then
+                opt_opalx_exe_path="${1#*=}"
+            else
+                opt_opalx_exe_path="$2"; shift 1
+            fi
+            ;;
+        --opalx-build-dir|--opalx-build-dir=* )
+            if [[ $1 == *=* ]]; then
+                opt_opalx_build_dir="${1#*=}"
+            else
+                opt_opalx_build_dir="$2"; shift 1
+            fi
+            ;;
+        --regtests-branch|--regtests-branch=* )
+            if [[ $1 == *=* ]]; then
+                opt_regtests_branch="${1#*=}"
+            else
+                opt_regtests_branch="$2"; shift 1
+            fi
+            ;;
 		--compile )
+            explicit_actions='yes'
+			compile_requested='yes'
 			do_compile='yes'
 			;;
+        --no-clean-after-compile )
+            clean_after_compile='no'
+            ;;
         --reg-tests )
+            explicit_actions='yes'
             do_regtests='yes'
             ;;
+        --test|--test=* )
+            explicit_actions='yes'
+            do_regtests='yes'
+            if [[ $1 == *=* ]]; then
+                opt_single_regtest="${1#*=}"
+            else
+                opt_single_regtest="Spin-Tracking"
+            fi
+            ;;
+        --no-reg-tests )
+            explicit_actions='yes'
+            do_regtests='no'
+            ;;
+        --no-salloc )
+            opt_no_salloc='yes'
+            ;;
+        --run-local-now )
+            explicit_actions='yes'
+            do_run_local_now='yes'
+            ;;
+        --no-gpl )
+            do_no_gpl='yes'
+            ;;
+        --only-generate-web-page )
+            explicit_actions='yes'
+            do_generate_web_page='yes'
+            ;;
+        --doNotCompileRun | --do-not-compile-run )
+            explicit_actions='yes'
+            do_not_compile_run='yes'
+            do_compile='no'
+            do_unittests='no'
+            do_regtests='no'
+            ;;
+        --cleanup-repo-to|--cleanup-repo-to=* )
+            explicit_actions='yes'
+            do_cleanup_repo='yes'
+            do_compile='no'
+            do_unittests='no'
+            do_regtests='no'
+            if [[ $1 == *=* ]]; then
+                cleanup_repo_to="${1#*=}"
+            else
+                cleanup_repo_to="$2"; shift 1
+            fi
+            ;;
+        --delete-branches|--delete-branches=* )
+            explicit_actions='yes'
+            do_cleanup_repo='yes'
+            do_compile='no'
+            do_unittests='no'
+            do_regtests='no'
+            if [[ $1 == *=* ]]; then
+                cleanup_delete_branches="${1#*=}"
+            else
+                cleanup_delete_branches="$2"; shift 1
+            fi
+            ;;
+        --cleanup-dry-run )
+            cleanup_apply='no'
+            ;;
+        --cleanup-apply )
+            cleanup_apply='yes'
+            ;;
         --unit-tests )
+            explicit_actions='yes'
             do_unittests='yes'
 			;;
+        --no-unit-tests )
+            explicit_actions='yes'
+            do_unittests='no'
+			;;
 		-f | --force )
+            explicit_actions='yes'
 		    opt_force='yes'
 			do_compile='yes'
             do_regtests='yes'
@@ -192,7 +408,21 @@ while (( $# > 0 )); do
 	shift 1
 done
 
-mkdir -p "${publish_dir}"
+if [[ -n "${opt_opalx_branch}" ]]; then
+    branch="${opt_opalx_branch}"
+fi
+
+if [[ -n "${opt_regtests_branch}" ]]; then
+    regtests_branch="${opt_regtests_branch}"
+fi
+
+if [[ -n "${opt_single_regtest}" ]]; then
+    tests=( "${opt_single_regtest}" )
+fi
+
+if [[ -n "${publish_dir}" && "${do_cleanup_repo}" != 'yes' ]]; then
+    mkdir -p "${publish_dir}"
+fi
 
 # Ensure unit tests are enabled for nightly builds unless explicitly set in config (match NightlyBuildX).
 case " ${cmake_args[*]} " in
@@ -208,11 +438,10 @@ esac
 #
 # ${PREFIX}/scripts					                        ${bindir}
 # ${PREFIX}/workspace					                    ${workspace}
-# ${PREFIX}/workspace/${branch}				                ${branchdir}
-# ${PREFIX}/workspace/${branch}/src			                ${srcdir}
-# ${PREFIX}/workspace/${branch}/${architecture}/build		${builddir}
-# ${PREFIX}/workspace/${branch}/tests			            ${testsbase}
-# ${PREFIX}/workspace/${branch}/tests/RegressionTests	    ${testsdir}
+# ${PREFIX}/workspace/opalx				                    ${srcdir}
+# ${PREFIX}/workspace/build/${architecture}/build-${branch_slug} ${builddir}
+# ${PREFIX}/workspace/regression-tests-x			            ${testsbase}
+# ${PREFIX}/workspace/regression-tests-x/RegressionTests	    ${testsdir}
 
 # Get absolute path to this script, portable handling for macOS/Linux
 if [[ "$(uname)" == "Darwin" ]]; then
@@ -224,11 +453,12 @@ fi
 declare -r bindir="${abs_scriptname%/*}"
 declare -r prefix="${bindir%/*}"
 declare -r workspace="${prefix}/workspace"
-declare -r branchdir="${workspace}/${branch}"
-declare -r srcdir="${branchdir}/src"
-declare    builddir="${branchdir}/${architecture}/build"
-declare -r testsbase="${branchdir}/tests"
+declare -r srcdir="${workspace}/opalx"
+declare    builddir=""
+declare    opalx_exe_path="${builddir}/src"
+declare -r testsbase="${workspace}/regression-tests-x"
 declare -r testsdir="${testsbase}/RegressionTests"
+declare    overview_dirty='no'
 
 # Result variables
 result_compile="-"
@@ -247,14 +477,253 @@ result_r_failed="-"
 result_r_disabled="-"
 result_r_broken="-"
 
-clone_repo() {
-	local -r repo_url="$1"
-	local -r dir="$2"
-	{
-		git clone "${repo_url}" "${dir}" || exit ${EC_GIT_ERROR}
-		cd "${dir}"
-		git checkout "${branch}" || exit ${EC_GIT_ERROR}
-	}
+# Reused publication state (non-master automatic nightly runs only).
+declare reuse_previous_run='no'
+declare reused_timestamp=''
+
+sanitize_path_component() {
+    local value="$1"
+    value="${value//\//_}"
+    value="${value// /_}"
+    value="${value//[^A-Za-z0-9._-]/_}"
+    [[ -n "${value}" ]] || value="default"
+    printf "%s" "${value}"
+}
+
+escape_sed_replacement() {
+    printf "%s" "$1" | sed 's/[\/&]/\\&/g'
+}
+
+set_branch_context() {
+    branch_slug=$(sanitize_path_component "${branch}")
+    if [[ "${managed_build_layout}" == 'yes' ]]; then
+        builddir="${workspace}/build/${architecture}/build-${branch_slug}"
+        opalx_exe_path="${builddir}/src"
+    fi
+}
+
+reset_results() {
+    result_compile="-"
+    result_u_total="-"
+    result_u_passed="-"
+    result_u_failed="-"
+    result_u_disabled="-"
+    result_u_broken="-"
+    result_r_total="-"
+    result_r_passed="-"
+    result_r_failed="-"
+    result_r_disabled="-"
+    result_r_broken="-"
+    reuse_previous_run='no'
+    reused_timestamp=''
+}
+
+join_state_values() {
+    local IFS=$'\034'
+    printf '%s' "$*"
+}
+
+current_run_state_file() {
+    printf '%s/overview/%s/%s/run-state.json' "${publish_dir}" "${branch_slug}" "${architecture}"
+}
+
+write_current_run_inputs() {
+    local -r output_file="$1"
+    local opalx_commit regression_commit nightlybuild_commit run_host
+    local opalx_src_dir="${srcdir}"
+    if [[ -n "${OPALX_SRC_DIR}" ]]; then
+        opalx_src_dir="${OPALX_SRC_DIR}"
+    fi
+    if [[ -d "${opalx_src_dir}/.git" ]]; then
+        opalx_commit=$(git -C "${opalx_src_dir}" rev-parse HEAD)
+    else
+        opalx_commit=""
+    fi
+    regression_commit=$(git -C "${testsbase}" rev-parse HEAD)
+    nightlybuild_commit=$(git -C "${prefix}" rev-parse HEAD)
+    run_host=$(hostname -s 2>/dev/null || hostname)
+
+    python3 - "${output_file}" \
+        "${branch}" "${architecture}" "${opalx_commit}" \
+        "${regtests_branch}" "${regression_commit}" \
+        "${nightlybuild_commit}" "${run_host}" "${do_no_gpl}" \
+        "${opt_config_file}" \
+        "$(join_state_values "${cmake_args[@]}")" \
+        "$(join_state_values "${opalx_args[@]}")" \
+        "$(join_state_values "${unittests_args[@]}")" \
+        "$(join_state_values "${tests[@]}")" <<'PY'
+import json
+import sys
+
+separator = "\x1c"
+
+def values(text):
+    return [] if not text else text.split(separator)
+
+state = {
+    "inputs": {
+        "opalxBranch": sys.argv[2],
+        "architecture": sys.argv[3],
+        "opalxCommit": sys.argv[4],
+        "regressionTestsBranch": sys.argv[5],
+        "regressionTestsCommit": sys.argv[6],
+        "nightlyBuildCommit": sys.argv[7],
+        "host": sys.argv[8],
+        "plotBackend": "matplotlib" if sys.argv[9] == "yes" else "gnuplot",
+        "configFile": sys.argv[10],
+        "cmakeArgs": values(sys.argv[11]),
+        "opalxArgs": values(sys.argv[12]),
+        "unitTestArgs": values(sys.argv[13]),
+        "selectedTests": values(sys.argv[14]),
+    }
+}
+
+with open(sys.argv[1], "w", encoding="utf-8") as stream:
+    json.dump(state, stream, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+}
+
+can_reuse_previous_run() {
+    [[ "${branch}" != 'master' ]] || return 1
+    [[ "${opt_force}" == 'no' ]] || return 1
+    [[ "${compile_requested}" == 'no' ]] || return 1
+    [[ "${do_run_local_now}" == 'no' && "${do_generate_web_page}" == 'no' ]] || return 1
+    [[ ${#tests[@]} -eq 0 ]] || return 1
+    if [[ "${explicit_actions}" == 'yes' ]]; then
+        [[ "${do_unittests}" == 'yes' && "${do_regtests}" == 'yes' ]] || return 1
+    fi
+    [[ -n "${publish_dir}" ]] || return 1
+
+    local -r state_file=$(current_run_state_file)
+    [[ -f "${state_file}" ]] || return 1
+
+    local current_inputs
+    current_inputs=$(mktemp "/tmp/opalx-run-inputs.XXXXXX")
+    write_current_run_inputs "${current_inputs}"
+
+    reused_timestamp=$(python3 - "${state_file}" "${current_inputs}" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        previous = json.load(stream)
+    with open(sys.argv[2], encoding="utf-8") as stream:
+        current = json.load(stream)
+except (OSError, ValueError):
+    raise SystemExit(1)
+
+if previous.get("status") != "passed":
+    raise SystemExit(1)
+if previous.get("inputs") != current.get("inputs"):
+    raise SystemExit(1)
+
+timestamp = previous.get("resultTimestamp", "")
+if not timestamp:
+    raise SystemExit(1)
+print(timestamp)
+PY
+    ) || {
+        rm -f "${current_inputs}"
+        reused_timestamp=''
+        return 1
+    }
+    rm -f "${current_inputs}"
+
+    [[ -f "${publish_dir}/unitTests/${branch_slug}/${architecture}/results_${reused_timestamp}.txt" ]] || return 1
+    [[ -f "${publish_dir}/regressionTests/${branch_slug}/${architecture}/results_${reused_timestamp}.html" ]] || return 1
+    return 0
+}
+
+record_successful_run_state() {
+    [[ -n "${publish_dir}" ]] || return 0
+    [[ "${result_u_total}" != '-' && "${result_r_total}" != '-' ]] || return 0
+    [[ "${result_u_failed}" == '0' && "${result_r_failed}" == '0' ]] || return 0
+    [[ "${result_u_broken}" == '-' || "${result_u_broken}" == '0' ]] || return 0
+    [[ "${result_r_broken}" == '-' || "${result_r_broken}" == '0' ]] || return 0
+
+    local -r state_file=$(current_run_state_file)
+    local state_dir tmp_state
+    state_dir=$(dirname "${state_file}")
+    mkdir -p "${state_dir}"
+    tmp_state=$(mktemp "/tmp/opalx-run-state.XXXXXX")
+    write_current_run_inputs "${tmp_state}"
+
+    python3 - "${tmp_state}" "${timestamp}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    state = json.load(stream)
+state["status"] = "passed"
+state["resultTimestamp"] = sys.argv[2]
+with open(sys.argv[1], "w", encoding="utf-8") as stream:
+    json.dump(state, stream, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+    mv "${tmp_state}" "${state_file}"
+}
+
+read_branches_file() {
+    local -r file="$1"
+    [[ -f "${file}" ]] || die ${EC_ARG_ERROR} "ERROR: branches file does not exist - ${file}"
+
+    local line
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -n "${line}" ]] || continue
+        branches+=( "${line}" )
+    done < "${file}"
+
+    (( ${#branches[@]} > 0 )) || die ${EC_ARG_ERROR} "ERROR: branches file is empty - ${file}"
+}
+
+read_published_branches() {
+    local -r overview_dir="${publish_dir}/overview"
+    [[ -d "${overview_dir}" ]] || return 0
+
+    local branch_dir label_file branch_name
+    while IFS= read -r branch_dir; do
+        branch_name=$(basename "${branch_dir}")
+        label_file="${branch_dir}/branch-name.txt"
+        [[ -f "${label_file}" ]] && branch_name=$(<"${label_file}")
+        [[ -n "${branch_name}" ]] && branches+=( "${branch_name}" )
+    done < <(find "${overview_dir}" -maxdepth 1 -type d ! -path "${overview_dir}" | sort)
+}
+
+checkout_requested_ref() {
+    local -r _branch="$1"
+    local pr_number=""
+
+    git fetch --prune origin
+
+    if git show-ref --verify --quiet "refs/heads/${_branch}"; then
+        git checkout "${_branch}"
+        return 0
+    fi
+
+    if git show-ref --verify --quiet "refs/remotes/origin/${_branch}"; then
+        git checkout -B "${_branch}" "origin/${_branch}"
+        return 0
+    fi
+
+    if [[ "${_branch}" =~ ^pr([0-9]+)(-|$) ]]; then
+        pr_number="${BASH_REMATCH[1]}"
+        if git ls-remote --exit-code origin "refs/pull/${pr_number}/head" >/dev/null 2>&1; then
+            git fetch origin "refs/pull/${pr_number}/head:refs/heads/${_branch}"
+            git checkout "${_branch}"
+            return 0
+        fi
+    fi
+
+    die ${EC_GIT_ERROR} "ERROR: cannot resolve OPALX branch '${_branch}' in ${PWD}.
+Checked local branch '${_branch}', remote branch 'origin/${_branch}'$(
+        [[ -n "${pr_number}" ]] && printf ", and GitHub PR ref 'refs/pull/%s/head'" "${pr_number}"
+    ).
+Use a branch name that exists on origin, or for PR branches use a name like pr501-description only when refs/pull/501/head exists on the OPALX remote."
 }
 
 update_repo() {
@@ -272,37 +741,64 @@ update_repo() {
 	if [[ ! -d "${_dir}" ]]; then
 		git clone "${_url}" "${_dir}"
 		cd "${_dir}"
-		git checkout "${_branch}"
-        bash gen_OPALrevision
+        checkout_requested_ref "${_branch}"
+        [[ -x gen_OPALrevision || -f gen_OPALrevision ]] && bash gen_OPALrevision
 		return 0
         # Otherwise merge the changes 
 	else
 		cd "${_dir}"
 		git rev-parse --is-inside-work-tree 1>/dev/null 2>&1 || \
 			die ${EC_GIT_ERROR} "${_dir}: is not a Git working directory!"
-		git checkout "${_branch}"
-		git fetch
+        local current_branch
+        current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+		checkout_requested_ref "${_branch}"
+
+        if ! git show-ref --verify --quiet "refs/remotes/origin/${_branch}"; then
+            echo "No remote branch origin/${_branch}; using checked-out local branch '${_branch}'."
+            [[ -x gen_OPALrevision || -f gen_OPALrevision ]] && bash gen_OPALrevision
+            return 0
+        fi
 
 		local -i num_changed_files=$(git diff --name-only  "origin/${_branch}"  | wc -l | awk '{print $1}')
 		if (( $num_changed_files == 0 )); then
 			echo "Working directory '${_dir}' is up to date!"
+            [[ "${current_branch}" != "${_branch}" ]] && return 0
 			return 1
 		fi
 		git merge "origin/${_branch}"
-        bash gen_OPALrevision
+        [[ -x gen_OPALrevision || -f gen_OPALrevision ]] && bash gen_OPALrevision
 		return 0
 	fi
 }
 
 compile_opalx() {
     result_compile='failed'
-	cd "${branchdir}"
 	rm -rf "${builddir}"
 	mkdir -p "${builddir}"
 	cd "${builddir}"
 	cmake "${cmake_args[@]}" "${srcdir}"
 	time make -j8
     result_compile='ok'
+}
+
+clean_build_artifacts() {
+    [[ "${clean_after_compile}" == 'yes' ]] || return 0
+    [[ "${result_compile}" == 'ok' ]] || return 0
+    [[ -d "${builddir}" ]] || return 0
+
+    cd "${builddir}"
+    printf "\nCleaning build object files after tests\n"
+    cmake --build . --target clean
+}
+
+check_plot_dependencies() {
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        python3 -c "import matplotlib" >/dev/null 2>&1 || \
+            die 1 "ERROR: --no-gpl requires matplotlib, but Python cannot import it."
+    else
+        command -v gnuplot >/dev/null 2>&1 || \
+            die 1 "ERROR: gnuplot is required for regression comparison plots. Use --no-gpl to switch to the Python plotting backend."
+    fi
 }
 
 run_regressiontests() {
@@ -314,7 +810,7 @@ run_regressiontests() {
 
     # Create publishing directory
     if [[ -n "${publish_dir}" ]]; then
-        local -r publish_regtests_dir="${publish_dir}/regressionTests/${branch}/${architecture}"
+        local -r publish_regtests_dir="${publish_dir}/regressionTests/${branch_slug}/${architecture}"
         mkdir -p "${publish_regtests_dir}"
         opts+=("--publish-dir=${publish_regtests_dir}")
     fi
@@ -323,12 +819,24 @@ run_regressiontests() {
 	if [[ -n "${opalx_args}" ]]; then
 		opts+=(${opalx_args[@]/#/--opalx-args=})
 	fi
-    opts+=("--opalx-exe-path=${builddir}/src")
+    opts+=("--opalx-exe-path=${opalx_exe_path}")
 	opts+=("--base-dir=${testsdir}")
     opts+=("--timestamp=${timestamp}")
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        opts+=("--no-gpl")
+    fi
+    if [[ "${do_generate_web_page}" == 'yes' ]]; then
+        opts+=("--only-generate-web-page")
+    fi
 
     # Run regression tests
-	salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    if [[ "${opt_no_salloc}" == 'yes' ]]; then
+        python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    elif command -v salloc >/dev/null 2>&1 && sinfo >/dev/null 2>&1; then
+        salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    else
+        python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    fi
 
     # Ensure existance of publishing directory
     local -i ec=$?
@@ -341,49 +849,102 @@ run_regressiontests() {
         xsltproc "${results_xslt}" "${results_xml}" > "${results_xml%.*}.html"
     fi
 
-    # get results from HTML file created/updated by regression-tests 
-    local index_html="${publish_regtests_dir}/index.html"
-    read passed broken failed total < <(
-            awk "/${timestamp}/ {
-                    split(\$4, p, \":\");
-                    split(\$6, b, \":\");
-                    split(\$8, f, \":\");
-                    split(\$10, t,  \":\");
-                    printf \"%s %s %s %s\n\", p[2], b[2], f[2], t[2]; exit}" \
-                            < "${index_html}")
-    result_r_total=${total/\]}
-    result_r_passed=${passed}
-    result_r_failed=${failed}
-    result_r_disabled='-'
-    result_r_broken=${broken}
+    # Get results from XML. Parsing the HTML index is brittle because it is
+    # presentation markup and changes with the report styling.
+    if [[ -f "${results_xml}" ]]; then
+        read total passed failed broken < <(
+            python3 -c '
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+tests = root.findall(".//Test")
+total = len(tests)
+passed = 0
+failed = 0
+broken = 0
+
+for test in tests:
+    state = (test.findtext("state") or "").strip().lower()
+    legacy_passed = (test.findtext("passed") or "").strip().lower()
+    if state == "passed" or legacy_passed == "true":
+        passed += 1
+    elif state == "broken":
+        broken += 1
+    elif state == "failed" or legacy_passed == "false":
+        failed += 1
+
+print(total, passed, failed, broken)
+' "${results_xml}")
+        result_r_total=${total}
+        result_r_passed=${passed}
+        result_r_failed=${failed}
+        result_r_disabled='-'
+        result_r_broken=${broken}
+    fi
+
+    return ${ec}
+}
+
+run_local_now() {
+    local -r run_tests="${bindir}/run-reg-tests.py"
+    local opts=("--run-local-now")
+    opts+=("--timestamp=${timestamp}")
+    if [[ "${do_no_gpl}" == 'yes' ]]; then
+        opts+=("--no-gpl")
+    fi
+    if [[ "${do_generate_web_page}" == 'yes' ]]; then
+        opts+=("--only-generate-web-page")
+    fi
+
+    if [[ -n "${publish_dir}" ]]; then
+        opts+=("--publish-dir=${publish_dir}")
+    fi
+
+    python3 "${run_tests}" "${opts[@]}"
+    local -i ec=$?
+
+    [[ -n "${publish_dir}" ]] || return ${ec}
+
+    local -r results_xml="${publish_dir}/results_${timestamp}.xml"
+    local -r results_xslt="${publish_dir}/results.xslt"
+    if [[ -f "${results_xml}" && -f "${results_xslt}" ]]; then
+        xsltproc "${results_xslt}" "${results_xml}" > "${results_xml%.*}.html"
+    fi
 
     return ${ec}
 }
 
 run_unittests() {
-    # Match NightlyBuildX: only run unit tests when publish directory is set.
-    [[ -n "${publish_dir}" ]] || return 0
-
     result_u_total='-'
     result_u_passed='-'
     result_u_failed='-'
     result_u_disabled='-'
     result_u_broken='-'
 
-    local -r unit_dir="${publish_dir}/unitTests/${branch}/${architecture}"
-    mkdir -p "${unit_dir}"
-    local -r results_txt="${unit_dir}/results_${timestamp}.txt"
+    local results_txt=''
+    if [[ -n "${publish_dir}" ]]; then
+        local -r unit_dir="${publish_dir}/unitTests/${branch_slug}/${architecture}"
+        mkdir -p "${unit_dir}"
+        results_txt="${unit_dir}/results_${timestamp}.txt"
+    fi
 
     [[ -d "${builddir}" ]] || return 0
     [[ -f "${builddir}/CTestTestfile.cmake" ]] || return 0
 
     cd "${builddir}"
-    # Run CTest (all tests, same as NightlyBuildX) and capture output; exit code from ctest.
-    ctest --output-on-failure "${unittests_args[@]}" | tee "${results_txt}"
-    local -i ec=${PIPESTATUS[0]}
+    # Run labeled unit tests and capture output; exit code from ctest.
+    local -i ec
+    if [[ -n "${results_txt}" ]]; then
+        ctest -L unit --output-on-failure "${unittests_args[@]}" | tee "${results_txt}"
+        ec=${PIPESTATUS[0]}
+    else
+        ctest -L unit --output-on-failure "${unittests_args[@]}"
+        ec=$?
+    fi
 
     # Parse summary line, e.g. "100% tests passed, 0 tests failed out of 10"
-    if [[ -s "${results_txt}" ]]; then
+    if [[ -n "${results_txt}" && -s "${results_txt}" ]]; then
         local summary
         summary=$(grep -E "tests failed out of" "${results_txt}" | tail -n 1 || true)
         if [[ -n "${summary}" ]]; then
@@ -411,7 +972,7 @@ update_overview() {
     [[ "${result_compile}${result_u_total}${result_r_total}" == '---' ]] && return 0
 
     # Create overview directory - separate from test results
-    local -r overview_dir="${publish_dir}/overview/${branch}/${architecture}"
+    local -r overview_dir="${publish_dir}/overview/${branch_slug}/${architecture}"
     mkdir -p "${overview_dir}"
 
     # org file with the table we have to update
@@ -421,8 +982,8 @@ update_overview() {
     # First, extract existing table data if the file exists
     local -r tmpfile=$(mktemp "/tmp/index_table.XXXXXX")
     if [[ -e "${index_org}" ]]; then
-        # Extract only the table lines (starting from the date header)
-        awk '/\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found {print}' "${index_org}" > "${tmpfile}"
+        # Extract only the table rows, not the surrounding page layout.
+        awk '/^\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found && /^\|/ {print} found && !/^\|/ {exit}' "${index_org}" > "${tmpfile}"
     else
         # New file - create empty table
         echo '|       Date | build | unit-tests   | regression-tests   |' > "${tmpfile}"
@@ -431,8 +992,11 @@ update_overview() {
     fi
 
     # Regenerate the full file from template with substitutions
-    sed -e "s/@BRANCH@/${branch}/g" \
-        -e "s/@ARCHITECTURE@/${architecture}/g" \
+    local branch_escaped architecture_escaped
+    branch_escaped=$(escape_sed_replacement "${branch}")
+    architecture_escaped=$(escape_sed_replacement "${architecture}")
+    sed -e "s/@BRANCH@/${branch_escaped}/g" \
+        -e "s/@ARCHITECTURE@/${architecture_escaped}/g" \
         "${bindir}/html/index.org" > "${index_org}"
     
     # Remove the template's empty table and append the actual table data
@@ -442,23 +1006,31 @@ update_overview() {
         sed -i '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
     fi
     cat "${tmpfile}" >> "${index_org}"
+    printf '%s\n' '#+BEGIN_EXPORT html' '</section></main>' '#+END_EXPORT' >> "${index_org}"
     rm -f "${tmpfile}"
 
     # links to generated XML pages used in the table
     # Adjusted relative paths from overview directory
-    local -r u_results_html="../../../unitTests/${branch}/${architecture}/results_${timestamp}.txt"
-    local -r r_results_html="../../../regressionTests/${branch}/${architecture}/results_${timestamp}.html"
+    local result_timestamp="${timestamp}"
+    [[ "${reuse_previous_run}" == 'yes' ]] && result_timestamp="${reused_timestamp}"
+    local -r u_results_html="../../../unitTests/${branch_slug}/${architecture}/results_${result_timestamp}.txt"
+    local -r r_results_html="../../../regressionTests/${branch_slug}/${architecture}/results_${result_timestamp}.html"
 
     local time_col
-    local ofile="${publish_dir}/output/${branch}/${architecture}/${timestamp}.txt"
+    local ofile="${publish_dir}/output/${branch_slug}/${architecture}/${timestamp}.txt"
     if [[ -e "${ofile}" ]]; then
-        time_col="[[../../../output/${branch}/${architecture}/${timestamp}.txt][${today} ${time/-/:}]]"
+        time_col="[[../../../output/${branch_slug}/${architecture}/${timestamp}.txt][${today} ${time/-/:}]]"
     else
         time_col="${today} ${time/-/:}"
     fi
 
-    # build string with result for unit-tests. This will be used as link-name.
-    if [[ "${result_u_total}" == "-" ]]; then
+    # Reused rows point to the previous real result files without duplicating artifacts.
+    if [[ "${reuse_previous_run}" == 'yes' ]]; then
+        local -r reused_label="unchanged; results from ${reused_timestamp/_/ }"
+        local -r u_report="[[${u_results_html}][${reused_label}]]"
+        local -r r_report="[[${r_results_html}][${reused_label}]]"
+        result_compile='unchanged'
+    elif [[ "${result_u_total}" == "-" ]]; then
         local -r u_report='-'
     else
         local -r u_t="total:${result_u_total}"
@@ -469,7 +1041,9 @@ update_overview() {
         local -r u_report="[[${u_results_html}][${u_t}; ${u_p}; ${u_f}; ${u_d}; ${u_b}]]"
     fi
     # build string with result for regression-tests. This will be used as link-name.
-    if [[ "${result_r_total}" == "-" ]]; then
+    if [[ "${reuse_previous_run}" == 'yes' ]]; then
+        : # r_report was set with the reused unit-test report above.
+    elif [[ "${result_r_total}" == "-" ]]; then
         local -r r_report='-'
     else
         local -r r_t="total:${result_r_total}"
@@ -486,7 +1060,6 @@ update_overview() {
     line+="| ${u_report} "
     line+="| ${r_report} "
     line+="|"
-    local -r tmpfile2=$(mktemp "/tmp/awk.XXXXXX")
     awk "{print}; /^\|-/ {print \"${line}\"}" \
         "${index_org}" > "${tmpfile}"
     mv "${tmpfile}" "${index_org}"
@@ -500,6 +1073,7 @@ update_overview() {
 
     # Define the styles to embed
     local -r style_content="<style>
+  $(cat ${bindir}/html/nightlybuildx.css 2>/dev/null || echo '')
   $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
   $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
 </style>
@@ -514,43 +1088,129 @@ update_overview() {
     
     # Update master landing page with all architectures
     update_master_landing_page
+    update_branch_selector_page
+    overview_dirty='no'
+}
+
+overview_style_content() {
+    printf '<style>\n'
+    cat "${bindir}/html/nightlybuildx.css" 2>/dev/null || true
+    cat "${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css" 2>/dev/null || true
+    cat "${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css" 2>/dev/null || true
+    printf '</style>\n'
+    printf '<script type="text/javascript">\n'
+    cat "${bindir}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js" 2>/dev/null || true
+    printf '</script>\n'
+}
+
+render_org_page() {
+    local -r index_org="$1"
+    local -r title="$2"
+    local -r style_file=$(mktemp "/tmp/nightlybuildx-style.XXXXXX")
+    overview_style_content > "${style_file}"
+    pandoc -f org -t html \
+        --metadata title="${title}" \
+        --include-in-header="${style_file}" \
+        -s -o "${index_org%.*}.html" "${index_org}"
+    perl -0pi -e 's/[ \t]+\n/\n/g' "${index_org%.*}.html"
+    rm -f "${style_file}"
+}
+
+refresh_architecture_overview_layout() {
+    local -r index_org="$1"
+    [[ -f "${index_org}" ]] || return 0
+
+    local -r tmpfile=$(mktemp "/tmp/index_table.XXXXXX")
+    awk '/^\|.*Date.*build.*unit-tests.*regression-tests/ {found=1} found && /^\|/ {print} found && !/^\|/ {exit}' "${index_org}" > "${tmpfile}"
+    if [[ ! -s "${tmpfile}" ]]; then
+        rm -f "${tmpfile}"
+        return 0
+    fi
+
+    local branch_escaped architecture_escaped
+    branch_escaped=$(escape_sed_replacement "${branch}")
+    architecture_escaped=$(escape_sed_replacement "${architecture}")
+    sed -e "s/@BRANCH@/${branch_escaped}/g" \
+        -e "s/@ARCHITECTURE@/${architecture_escaped}/g" \
+        "${bindir}/html/index.org" > "${index_org}"
+
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+        sed -i '' '/^#+SETUPFILE/d' "${index_org}"
+    else
+        sed -i '/|.*Date.*build.*unit-tests.*regression-tests/,$ d' "${index_org}"
+        sed -i '/^#+SETUPFILE/d' "${index_org}"
+    fi
+    cat "${tmpfile}" >> "${index_org}"
+    printf '%s\n' '#+BEGIN_EXPORT html' '</section></main>' '#+END_EXPORT' >> "${index_org}"
+    rm -f "${tmpfile}"
+}
+
+regenerate_published_html_for_branch() {
+    [[ -n "${publish_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: --doNotCompileRun requires --publish-dir"
+
+    local -r published_branch_dir="${publish_dir}/overview/${branch_slug}"
+    if [[ ! -d "${published_branch_dir}" ]]; then
+        printf "No published overview directory for branch '%s' (%s), skipping.\n" "${branch}" "${published_branch_dir}"
+        update_branch_selector_page
+        return 0
+    fi
+
+    local arch_dir index_org
+    while IFS= read -r arch_dir; do
+        architecture=$(basename "${arch_dir}")
+        index_org="${arch_dir}/index.org"
+        if [[ -f "${index_org}" ]]; then
+            printf "Re-render published overview: %s / %s\n" "${branch}" "${architecture}"
+            refresh_architecture_overview_layout "${index_org}"
+            render_org_page "${index_org}" "OPALX"
+        fi
+    done < <(find "${published_branch_dir}" -maxdepth 1 -type d ! -path "${published_branch_dir}" | sort)
+
+    update_master_landing_page
+    update_branch_selector_page
 }
 
 update_master_landing_page() {
     # Master landing page location
-    local -r master_dir="${publish_dir}/overview/${branch}"
+    local -r master_dir="${publish_dir}/overview/${branch_slug}"
     local -r master_org="${master_dir}/index.org"
     local -r master_html="${master_dir}/index.html"
     
     mkdir -p "${master_dir}"
+    printf "%s\n" "${branch}" > "${master_dir}/branch-name.txt"
     
     # Find all architecture directories under this branch
     local -a architectures=()
-    if [[ -d "${publish_dir}/overview/${branch}" ]]; then
+    if [[ -d "${publish_dir}/overview/${branch_slug}" ]]; then
         while IFS= read -r arch_dir; do
             local arch_name=$(basename "${arch_dir}")
             # Skip files, only process directories
             [[ -d "${arch_dir}" ]] && [[ -f "${arch_dir}/index.html" ]] && architectures+=("${arch_name}")
-        done < <(find "${publish_dir}/overview/${branch}" -maxdepth 1 -type d ! -path "${publish_dir}/overview/${branch}")
+        done < <(find "${publish_dir}/overview/${branch_slug}" -maxdepth 1 -type d ! -path "${publish_dir}/overview/${branch_slug}")
     fi
     
     # Build the master page from template
     local -r tmpfile=$(mktemp "/tmp/master-landing.XXXXXX")
+    local branch_escaped
+    branch_escaped=$(escape_sed_replacement "${branch}")
     
     # Copy template and substitute @BRANCH@, stop at placeholder
-    sed "s/@BRANCH@/${branch}/g" "${bindir}/html/master-index.org" | \
+    sed "s/@BRANCH@/${branch_escaped}/g" "${bindir}/html/master-index.org" | \
         awk '/ARCHITECTURE_LINKS will be inserted here/ {exit} {print}' > "${tmpfile}"
     
     # Add links for each architecture
     if (( ${#architectures[@]} > 0 )); then
+        printf '%s\n' '#+BEGIN_EXPORT html' '<div class="links">' >> "${tmpfile}"
         for arch in "${architectures[@]}"; do
-            echo "" >> "${tmpfile}"
-            echo "- [[./${arch}/index.html][${arch} Details]]" >> "${tmpfile}"
+            printf '<a class="result-link" href="./%s/index.html"><span>%s</span><span class="mono">Open overview</span></a>\n' "${arch}" "${arch}" >> "${tmpfile}"
         done
+        printf '%s\n' '</div>' '#+END_EXPORT' >> "${tmpfile}"
     else
         echo "" >> "${tmpfile}"
         echo "No architectures available yet. Run tests to populate this page." >> "${tmpfile}"
     fi
+    printf '%s\n' '#+BEGIN_EXPORT html' '</section></main>' '#+END_EXPORT' >> "${tmpfile}"
     
     # Write the updated master page
     mv "${tmpfile}" "${master_org}"
@@ -562,39 +1222,587 @@ update_master_landing_page() {
         sed -i '/^#+SETUPFILE/d' "${master_org}"
     fi
     
-    # Convert to HTML
-    local -r style_content="<style>
-  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/htmlize.css 2>/dev/null || echo '')
-  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/css/readtheorg.css 2>/dev/null || echo '')
-</style>
-<script type=\"text/javascript\">
-  $(cat ${bindir}/html/org-html-themes/src/readtheorg_theme/js/readtheorg.js 2>/dev/null || echo '')
-</script>"
-    
-    pandoc -f org -t html \
-        --metadata title="OPALX Regression Tests" \
-        --include-in-header=<(echo "${style_content}") \
-        -s -o "${master_html}" "${master_org}"
+    render_org_page "${master_org}" "OPALX Regression Tests"
 }
 
-main() {
-    # local variable for the opalx binary
-    local -r opalxbin="${builddir}/src/opalx"
-    
-    # Getting latest repo version
-    printf "\nUpdating OPALX source repository... \n"
-	update_repo "${srcdir}" "${branch}" "${src_repo_url}" && do_compile='yes'
+trim_text() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf "%s" "${value}"
+}
 
-    # If the binary does not exist we need to compile
-    [[ -e ${opalxbin} ]] || do_compile='yes'
+latest_overview_row() {
+    local -r index_org="$1"
+    [[ -f "${index_org}" ]] || return 1
+    awk '/^\| [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {print; exit}' "${index_org}"
+}
+
+strip_org_link_text() {
+    local value="$1"
+    value=$(trim_text "${value}")
+    while [[ "${value}" =~ \[\[[^][]+\]\[([^][]+)\]\] ]]; do
+        value="${value/${BASH_REMATCH[0]}/${BASH_REMATCH[1]}}"
+    done
+    printf "%s" "${value}"
+}
+
+run_count_value() {
+    local report="$1"
+    local key="$2"
+    report=$(strip_org_link_text "${report}")
+    if [[ "${report}" =~ ${key}:([0-9]+) ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    else
+        printf "-"
+    fi
+}
+
+test_status_class() {
+    local report="$1"
+    report=$(trim_text "${report}")
+    report=$(strip_org_link_text "${report}")
+
+    if [[ -z "${report}" || "${report}" == "-" ]]; then
+        printf "skip"
+    elif [[ "${report}" == *"unchanged; results from "* || "${report}" == "unchanged" ]]; then
+        printf "reused"
+    elif [[ "${report}" == "ok" ]]; then
+        printf "ok"
+    elif [[ "${report}" == "failed" || "${report}" == "nok" ]]; then
+        printf "nok"
+    elif [[ "${report}" == *"failed:0"* && ( "${report}" == *"broken:0"* || "${report}" == *"broken:-"* ) ]]; then
+        printf "ok"
+    else
+        printf "nok"
+    fi
+}
+
+test_status_label() {
+    local -r status_value="$1"
+    case "${status_value}" in
+        ok) printf "ok" ;;
+        nok) printf "nok" ;;
+        reused) printf "reused" ;;
+        *) printf "-" ;;
+    esac
+}
+
+test_summary_label() {
+    local -r report="$1"
+    if [[ "$(test_status_class "${report}")" == 'reused' ]]; then
+        printf "reused"
+    else
+        printf '%s/%s' "$(run_count_value "${report}" "passed")" "$(run_count_value "${report}" "total")"
+    fi
+}
+
+branch_architecture_checks_html() {
+    local -r overview_dir="$1"
+    local -r branch_name="$2"
+    local -a arch_dirs=()
+    local arch_dir arch_name index_org row
+    local _ date_col build_col unit_col regression_col __
+    local unit_status regression_status unit_label regression_label
+
+    while IFS= read -r arch_dir; do
+        [[ -f "${arch_dir}/index.org" ]] && arch_dirs+=( "${arch_dir}" )
+    done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
+
+    for arch_dir in "${arch_dirs[@]}"; do
+        arch_name=$(basename "${arch_dir}")
+        index_org="${arch_dir}/index.org"
+        row=$(latest_overview_row "${index_org}" || true)
+
+        if [[ -n "${row}" ]]; then
+            IFS='|' read -r _ date_col build_col unit_col regression_col __ <<< "${row}"
+            unit_status=$(test_status_class "${unit_col}")
+            regression_status=$(test_status_class "${regression_col}")
+        else
+            date_col="-"
+            unit_status="skip"
+            regression_status="skip"
+        fi
+
+        unit_label=$(test_status_label "${unit_status}")
+        regression_label=$(test_status_label "${regression_status}")
+        date_col=$(trim_text "${date_col}")
+
+        printf '        <div class="arch-line"><a href="%s/%s/index.html">%s</a><span class="badge %s">Unit %s</span><span class="badge %s">Reg %s</span><span class="run-date">%s</span></div>\n' \
+            "${branch_name}" "${arch_name}" "${arch_name}" \
+            "${unit_status}" "${unit_label}" \
+            "${regression_status}" "${regression_label}" \
+            "${date_col}"
+    done
+}
+
+update_branch_selector_page() {
+    [[ -n "${publish_dir}" ]] || return 0
+
+    local -r overview_dir="${publish_dir}/overview"
+    local -r selector_html="${overview_dir}/index.html"
+    mkdir -p "${overview_dir}"
+    cp "${bindir}/html/nightlybuildx.css" "${overview_dir}/nightlybuildx.css"
+
+    local -a branch_dirs=()
+    while IFS= read -r branch_dir; do
+        [[ -f "${branch_dir}/index.html" ]] && branch_dirs+=( "$(basename "${branch_dir}")" )
+    done < <(find "${overview_dir}" -maxdepth 1 -type d ! -path "${overview_dir}" | sort)
+
+    local latest_date="-"
+    local latest_branch="-"
+    local latest_arch="-"
+    local total_arch=0
+    local ok_arch=0
+    local nok_arch=0
+    local branch_name branch_label label_file arch_dir arch_name index_org row
+    local row_html
+    local _ date_col build_col unit_col regression_col __
+    local unit_status regression_status
+    local -r rows_tmp=$(mktemp "/tmp/overview_rows.XXXXXX")
+
+    for branch_name in "${branch_dirs[@]}"; do
+        while IFS= read -r arch_dir; do
+            [[ -f "${arch_dir}/index.org" ]] || continue
+            total_arch=$((total_arch + 1))
+            arch_name=$(basename "${arch_dir}")
+            row=$(latest_overview_row "${arch_dir}/index.org" || true)
+            if [[ -n "${row}" ]]; then
+                IFS='|' read -r _ date_col build_col unit_col regression_col __ <<< "${row}"
+                date_col=$(strip_org_link_text "${date_col}")
+                unit_status=$(test_status_class "${unit_col}")
+                regression_status=$(test_status_class "${regression_col}")
+                if [[ ( "${unit_status}" == "ok" || "${unit_status}" == "reused" ) && \
+                      ( "${regression_status}" == "ok" || "${regression_status}" == "reused" ) ]]; then
+                    ok_arch=$((ok_arch + 1))
+                else
+                    nok_arch=$((nok_arch + 1))
+                fi
+                if [[ "${latest_date}" == "-" || "${date_col}" > "${latest_date}" ]]; then
+                    latest_date="${date_col}"
+                    label_file="${overview_dir}/${branch_name}/branch-name.txt"
+                    latest_branch="${branch_name}"
+                    [[ -f "${label_file}" ]] && latest_branch=$(<"${label_file}")
+                    latest_arch="${arch_name}"
+                fi
+            fi
+        done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
+    done
+
+    {
+        printf '%s\n' \
+            '<!doctype html>' \
+            '<html lang="en">' \
+            '<head>' \
+            '  <meta charset="utf-8">' \
+            '  <meta name="viewport" content="width=device-width, initial-scale=1">' \
+            '  <title>OPALX Published Regression Results</title>' \
+            '  <link rel="stylesheet" href="nightlybuildx.css">' \
+            '</head>' \
+            '<body>' \
+            '  <header class="topbar">' \
+            '    <div class="brand"><strong>OPALX</strong><span>Published Regression Results</span></div>' \
+            '    <div class="scope"><span class="readonly">read-only published data</span><span class="muted mono">opal-live-doc</span></div>' \
+            '  </header>' \
+            '  <main class="dashboard">' \
+            '    <div class="page-head">' \
+            '      <div><h1>Browse Existing Results</h1><div class="hint">Selections only open already published branch and architecture pages.</div></div>' \
+            '    </div>' \
+            '    <div class="filters">' \
+            '      <div class="field"><label for="branchSelect">OPALX branch</label><select id="branchSelect"><option value="">All branches</option>'
+        for branch_name in "${branch_dirs[@]}"; do
+            label_file="${overview_dir}/${branch_name}/branch-name.txt"
+            branch_label="${branch_name}"
+            [[ -f "${label_file}" ]] && branch_label=$(<"${label_file}")
+            printf '        <option value="%s">%s</option>\n' "${branch_name}" "${branch_label}"
+        done
+        printf '%s\n' \
+            '      </select></div>' \
+            '      <div class="field"><label>Reference branch</label><select disabled><option>from published run metadata</option></select></div>' \
+            '    </div>' \
+            '    <div class="summary">'
+        printf '      <div class="metric"><span>Branches</span><b>%s</b><strong>published</strong></div>\n' "${#branch_dirs[@]}"
+        printf '      <div class="metric"><span>Architectures</span><b>%s</b><strong>%s ok, %s attention</strong></div>\n' "${total_arch}" "${ok_arch}" "${nok_arch}"
+        printf '      <div class="metric"><span>Latest run</span><b>%s</b><strong>%s / %s</strong></div>\n' "${latest_date}" "${latest_branch}" "${latest_arch}"
+        printf '%s\n' \
+            '    </div>' \
+            '    <section class="section">' \
+            '      <div class="section-head"><h2>Published Runs</h2><span class="hint">Newest row per branch and architecture</span></div>' \
+            '      <table class="runs">' \
+            '        <thead><tr><th>Branch</th><th>Architecture</th><th>Latest run</th><th>Build</th><th>Unit</th><th>Regression</th><th>Artifacts</th></tr></thead>' \
+            '        <tbody>'
+        : > "${rows_tmp}"
+        for branch_name in "${branch_dirs[@]}"; do
+            label_file="${overview_dir}/${branch_name}/branch-name.txt"
+            branch_label="${branch_name}"
+            [[ -f "${label_file}" ]] && branch_label=$(<"${label_file}")
+            while IFS= read -r arch_dir; do
+                [[ -f "${arch_dir}/index.org" ]] || continue
+                arch_name=$(basename "${arch_dir}")
+                index_org="${arch_dir}/index.org"
+                row=$(latest_overview_row "${index_org}" || true)
+                date_col="-"
+                build_col="-"
+                unit_col="-"
+                regression_col="-"
+                if [[ -n "${row}" ]]; then
+                    IFS='|' read -r _ date_col build_col unit_col regression_col __ <<< "${row}"
+                fi
+                date_col=$(strip_org_link_text "${date_col}")
+                build_col=$(strip_org_link_text "${build_col}")
+                unit_status=$(test_status_class "${unit_col}")
+                regression_status=$(test_status_class "${regression_col}")
+                printf -v row_html '          <tr data-branch="%s"><td class="mono">%s</td><td>%s</td><td>%s</td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s</span></td><td><span class="badge %s">%s</span></td><td><a href="%s/%s/index.html">Open overview</a></td></tr>' \
+                    "${branch_name}" \
+                    "${branch_label}" \
+                    "${arch_name}" \
+                    "${date_col}" \
+                    "$(test_status_class "${build_col}")" "$(trim_text "${build_col}")" \
+                    "${unit_status}" "$(test_summary_label "${unit_col}")" \
+                    "${regression_status}" "$(test_summary_label "${regression_col}")" \
+                    "${branch_name}" "${arch_name}"
+                printf '%s\t%s\n' "${date_col}" "${row_html}" >> "${rows_tmp}"
+            done < <(find "${overview_dir}/${branch_name}" -maxdepth 1 -type d ! -path "${overview_dir}/${branch_name}" | sort)
+        done
+        sort -r -t $'\t' -k1,1 "${rows_tmp}" | while IFS=$'\t' read -r _ row_html; do
+            printf '%s\n' "${row_html}"
+        done
+        printf '%s\n' \
+            '        </tbody>' \
+            '      </table>' \
+            '      <div class="table-pager" id="publishedRunsPager">' \
+            '        <button type="button" id="publishedRunsPrev">Previous</button>' \
+            '        <span id="publishedRunsStatus" class="hint"></span>' \
+            '        <button type="button" id="publishedRunsNext">Next</button>' \
+            '      </div>' \
+            '    </section>' \
+            '  </main>' \
+            '  <script>' \
+            '    (function () {' \
+            '      var pageSize = 9;' \
+            '      var page = 0;' \
+            '      var branchSelect = document.getElementById("branchSelect");' \
+            '      var rows = Array.prototype.slice.call(document.querySelectorAll(".runs tbody tr"));' \
+            '      var prev = document.getElementById("publishedRunsPrev");' \
+            '      var next = document.getElementById("publishedRunsNext");' \
+            '      var status = document.getElementById("publishedRunsStatus");' \
+            '      function matchingRows() {' \
+            '        var branch = branchSelect ? branchSelect.value : "";' \
+            '        return rows.filter(function (row) { return !branch || row.getAttribute("data-branch") === branch; });' \
+            '      }' \
+            '      function renderRuns() {' \
+            '        var visible = matchingRows();' \
+            '        var pageCount = Math.max(1, Math.ceil(visible.length / pageSize));' \
+            '        if (page >= pageCount) page = pageCount - 1;' \
+            '        var start = page * pageSize;' \
+            '        var end = start + pageSize;' \
+            '        rows.forEach(function (row) { row.hidden = true; });' \
+            '        visible.slice(start, end).forEach(function (row) { row.hidden = false; });' \
+            '        if (status) status.textContent = visible.length ? "Showing " + (start + 1) + "-" + Math.min(end, visible.length) + " of " + visible.length : "No published runs";' \
+            '        if (prev) prev.disabled = page === 0;' \
+            '        if (next) next.disabled = page >= pageCount - 1;' \
+            '      }' \
+            '      if (branchSelect) branchSelect.addEventListener("change", function () { page = 0; renderRuns(); });' \
+            '      if (prev) prev.addEventListener("click", function () { if (page > 0) { page -= 1; renderRuns(); } });' \
+            '      if (next) next.addEventListener("click", function () { page += 1; renderRuns(); });' \
+            '      renderRuns();' \
+            '    }());' \
+            '  </script>' \
+            '</body>' \
+            '</html>'
+    } > "${selector_html}"
+    rm -f "${rows_tmp}"
+    perl -0pi -e 's/[ \t]+\n/\n/g' "${selector_html}"
+}
+
+regenerate_published_regression_results_for_branch() {
+    [[ -n "${publish_dir}" ]] || return 0
+
+    local -r published_regtests_dir="${publish_dir}/regressionTests/${branch_slug}"
+    [[ -d "${published_regtests_dir}" ]] || return 0
+
+    local arch_dir results_xml
+    while IFS= read -r arch_dir; do
+        printf "Re-render published regression results: %s / %s\n" "${branch}" "$(basename "${arch_dir}")"
+        cp "${bindir}/html/results.xslt" "${arch_dir}/results.xslt"
+        cp "${bindir}/html/accordion.js" "${arch_dir}/accordion.js"
+        cp "${bindir}/html/nightlybuildx.css" "${arch_dir}/nightlybuildx.css"
+        cp "${bindir}/html/ok.png" "${arch_dir}/ok.png"
+        cp "${bindir}/html/nok.png" "${arch_dir}/nok.png"
+
+        while IFS= read -r results_xml; do
+            xsltproc "${arch_dir}/results.xslt" "${results_xml}" > "${results_xml%.*}.html"
+            perl -0pi -e 's/[ \t]+\n/\n/g' "${results_xml%.*}.html"
+        done < <(find "${arch_dir}" -maxdepth 1 -type f -name 'results_*.xml' | sort)
+    done < <(find "${published_regtests_dir}" -maxdepth 1 -type d ! -path "${published_regtests_dir}" | sort)
+}
+
+validate_iso_date() {
+    local -r value="$1"
+    [[ "${value}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || \
+        die ${EC_ARG_ERROR} "ERROR: cleanup date must use ISO format YYYY-MM-DD - got '${value}'"
+    python3 -c 'import datetime, sys; datetime.date.fromisoformat(sys.argv[1])' "${value}" 2>/dev/null || \
+        die ${EC_ARG_ERROR} "ERROR: invalid cleanup date - ${value}"
+}
+
+cleanup_print_or_delete() {
+    local -r path="$1"
+    [[ -e "${path}" ]] || return 0
+
+    if [[ "${cleanup_apply}" == 'yes' ]]; then
+        printf 'Delete: %s\n' "${path}"
+        rm -rf "${path}"
+    else
+        printf 'Would delete: %s\n' "${path}"
+    fi
+}
+
+cleanup_delete_branch_tree() {
+    local branch_name="$1"
+    branch_name=$(trim_text "${branch_name}")
+    [[ -n "${branch_name}" ]] || return 0
+
+    local branch_dir
+    branch_dir=$(sanitize_path_component "${branch_name}")
+    printf "Cleanup published branch: %s (%s)\n" "${branch_name}" "${branch_dir}"
+
+    cleanup_print_or_delete "${publish_dir}/overview/${branch_dir}"
+    cleanup_print_or_delete "${publish_dir}/regressionTests/${branch_dir}"
+    cleanup_print_or_delete "${publish_dir}/unitTests/${branch_dir}"
+    cleanup_print_or_delete "${publish_dir}/output/${branch_dir}"
+}
+
+cleanup_delete_requested_branches() {
+    [[ -n "${cleanup_delete_branches}" ]] || return 0
+
+    local -a cleanup_branch_names=()
+    local branch_name
+    IFS=',' read -ra cleanup_branch_names <<< "${cleanup_delete_branches}"
+    for branch_name in "${cleanup_branch_names[@]}"; do
+        cleanup_delete_branch_tree "${branch_name}"
+    done
+}
+
+cleanup_date_from_basename() {
+    local -r name="$1"
+    if [[ "${name}" =~ ^results_([0-9]{4}-[0-9]{2}-[0-9]{2})_[0-9]{2}-[0-9]{2}\.(html|xml|txt)$ ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    elif [[ "${name}" =~ ^plots_([0-9]{4}-[0-9]{2}-[0-9]{2})_[0-9]{2}-[0-9]{2}$ ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    elif [[ "${name}" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2})_[0-9]{2}-[0-9]{2}\.txt$ ]]; then
+        printf "%s" "${BASH_REMATCH[1]}"
+    fi
+}
+
+cleanup_delete_artifacts_to_date() {
+    [[ -n "${cleanup_repo_to}" ]] || return 0
+    validate_iso_date "${cleanup_repo_to}"
+
+    local root path name item_date
+    for root in "${publish_dir}/regressionTests" "${publish_dir}/unitTests" "${publish_dir}/output"; do
+        [[ -d "${root}" ]] || continue
+        while IFS= read -r path; do
+            name=$(basename "${path}")
+            item_date=$(cleanup_date_from_basename "${name}")
+            [[ -n "${item_date}" ]] || continue
+            if [[ "${item_date}" < "${cleanup_repo_to}" || "${item_date}" == "${cleanup_repo_to}" ]]; then
+                cleanup_print_or_delete "${path}"
+            fi
+        done < <(find "${root}" -mindepth 1 \( -type f -o -type d \) | sort)
+    done
+}
+
+cleanup_prune_overview_rows_to_date() {
+    [[ -n "${cleanup_repo_to}" ]] || return 0
+
+    local index_org tmpfile
+    while IFS= read -r index_org; do
+        if [[ "${cleanup_apply}" != 'yes' ]]; then
+            awk -v cutoff="${cleanup_repo_to}" '
+                /^\| [0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+                    date = substr($0, 3, 10)
+                    if (date <= cutoff) count++
+                }
+                END {
+                    if (count > 0) {
+                        printf("Would remove %d overview row(s): %s\n", count, FILENAME)
+                    }
+                }
+            ' "${index_org}"
+            continue
+        fi
+
+        tmpfile=$(mktemp "/tmp/overview-prune.XXXXXX")
+        awk -v cutoff="${cleanup_repo_to}" '
+            /^\| [0-9]{4}-[0-9]{2}-[0-9]{2}/ {
+                date = substr($0, 3, 10)
+                if (date <= cutoff) next
+            }
+            { print }
+        ' "${index_org}" > "${tmpfile}"
+        mv "${tmpfile}" "${index_org}"
+    done < <(find "${publish_dir}/overview" -mindepth 3 -maxdepth 3 -type f -name index.org 2>/dev/null | sort)
+}
+
+cleanup_remove_empty_published_dirs() {
+    [[ "${cleanup_apply}" == 'yes' ]] || return 0
+
+    local root
+    for root in "${publish_dir}/regressionTests" "${publish_dir}/unitTests" "${publish_dir}/output"; do
+        [[ -d "${root}" ]] || continue
+        find "${root}" -depth -type d -empty -delete
+    done
+}
+
+regenerate_all_published_overviews() {
+    [[ -n "${publish_dir}" ]] || return 0
+    [[ -d "${publish_dir}/overview" ]] || return 0
+
+    local branch_dir arch_dir index_org label_file
+    while IFS= read -r branch_dir; do
+        branch_slug=$(basename "${branch_dir}")
+        branch="${branch_slug}"
+        label_file="${branch_dir}/branch-name.txt"
+        [[ -f "${label_file}" ]] && branch=$(<"${label_file}")
+
+        while IFS= read -r arch_dir; do
+            architecture=$(basename "${arch_dir}")
+            index_org="${arch_dir}/index.org"
+            [[ -f "${index_org}" ]] || continue
+            refresh_architecture_overview_layout "${index_org}"
+            render_org_page "${index_org}" "OPALX"
+        done < <(find "${branch_dir}" -maxdepth 1 -type d ! -path "${branch_dir}" | sort)
+
+        update_master_landing_page
+    done < <(find "${publish_dir}/overview" -maxdepth 1 -type d ! -path "${publish_dir}/overview" | sort)
+
+    update_branch_selector_page
+}
+
+cleanup_published_repo() {
+    [[ -n "${publish_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: cleanup requires --publish-dir"
+    [[ -d "${publish_dir}" ]] || die ${EC_ARG_ERROR} "ERROR: publish directory does not exist - ${publish_dir}"
+    [[ -n "${cleanup_repo_to}${cleanup_delete_branches}" ]] || \
+        die ${EC_ARG_ERROR} "ERROR: cleanup requested without --cleanup-repo-to or --delete-branches"
+
+    printf "Cleanup mode: %s\n" "$([[ "${cleanup_apply}" == 'yes' ]] && printf apply || printf dry-run)"
+    printf "Publish directory: %s\n" "${publish_dir}"
+
+    cleanup_delete_requested_branches
+    cleanup_delete_artifacts_to_date
+    cleanup_prune_overview_rows_to_date
+
+    if [[ "${cleanup_apply}" == 'yes' ]]; then
+        cleanup_remove_empty_published_dirs
+        regenerate_all_published_overviews
+    else
+        printf "Dry run only. Re-run with --cleanup-apply to delete files and regenerate overview pages.\n"
+    fi
+}
+
+run_current_branch() {
+    set_branch_context
+    reset_results
+    local -i ec=0
+
+    printf "\n== OPALX branch: %s ==\n" "${branch}"
+
+    if [[ "${do_not_compile_run}" == 'yes' ]]; then
+        regenerate_published_regression_results_for_branch
+        regenerate_published_html_for_branch
+        return 0
+    fi
+
+    if [[ "${do_run_local_now}" == 'yes' || \
+          "${do_regtests}" == 'yes' || \
+          "${do_generate_web_page}" == 'yes' || \
+          "${opt_force}" == 'yes' ]]; then
+        check_plot_dependencies
+    fi
+
+    if [[ "${do_run_local_now}" == 'yes' || \
+          ( "${do_generate_web_page}" == 'yes' && \
+            "${do_compile}" == 'no' && \
+            "${do_unittests}" == 'no' && \
+            "${do_regtests}" == 'no' && \
+            "${opt_force}" == 'no' ) ]]; then
+        run_local_now
+        return $?
+    fi
+
+    if [[ -n "${opt_opalx_build_dir}" ]]; then
+        managed_build_layout='no'
+        builddir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${opt_opalx_build_dir}")
+        if [[ -z "${opt_opalx_exe_path}" ]]; then
+            # Support both the legacy src/ layout and the standard-folders
+            # layout (bin/) used by OPALX_USE_STANDARD_FOLDERS / IPPL_USE_STANDARD_FOLDERS.
+            if [[ -x "${builddir}/src/opalx" ]]; then
+                opt_opalx_exe_path="${builddir}/src"
+            elif [[ -x "${builddir}/bin/opalx" ]]; then
+                opt_opalx_exe_path="${builddir}/bin"
+            else
+                opt_opalx_exe_path="${builddir}/src"
+            fi
+        fi
+    fi
+
+    if [[ -n "${opt_opalx_exe_path}" ]]; then
+        opalx_exe_path=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${opt_opalx_exe_path}")
+        if [[ ! -x "${opalx_exe_path}/opalx" ]]; then
+            die 1 "ERROR: --opalx-exe-path must point to a directory containing an executable opalx - ${opalx_exe_path}"
+        fi
+        do_compile='no'
+        if [[ "${explicit_actions}" == 'no' ]]; then
+            do_regtests='yes'
+        fi
+        result_compile='external'
+        printf "\nUsing existing OPALX executable: ${opalx_exe_path}/opalx\n"
+        if [[ -n "${opt_opalx_build_dir}" ]]; then
+            printf "Using existing OPALX build directory: ${builddir}\n"
+        fi
+    fi
+
+    # local variable for the opalx binary
+    local -r opalxbin="${opalx_exe_path}/opalx"
+
+    if [[ -z "${opt_opalx_exe_path}" ]]; then
+    
+        # Getting latest repo version
+        printf "\nUpdating OPALX source repository... \n"
+	    if update_repo "${srcdir}" "${branch}" "${src_repo_url}"; then
+            do_compile='yes'
+        fi
+
+        # If the binary does not exist we need to compile
+        [[ -e ${opalxbin} ]] || do_compile='yes'
+    fi
+
+    # Both repositories must be current before deciding whether an automatic
+    # non-master nightly run has identical inputs to its last successful run.
+    if [[ "${do_regtests}" == 'yes' || "${explicit_actions}" == 'no' ]]; then
+        printf "\nUpdating regression tests repository...\n"
+        update_repo "${testsbase}" "${regtests_branch}" "${tests_repo_url}" && do_regtests='yes'
+    fi
+
+	if can_reuse_previous_run; then
+        printf "\nInputs unchanged; reusing published results from %s\n" "${reused_timestamp}"
+        reuse_previous_run='yes'
+		aborting='no'
+        overview_dirty='yes'
+        update_overview
+        return 0
+    fi
 	aborting='no'
+    overview_dirty='yes'
  
     # Compilation
 	if [[ "${do_compile}" == "yes" ]]; then
         printf "\nStarting OPALX compilation \n"
 		compile_opalx
-		do_unittests='yes'
-		do_regtests='yes'
+        if [[ "${explicit_actions}" == 'no' ]]; then
+		    do_unittests='yes'
+		    do_regtests='yes'
+        fi
 	fi
     
     # Unit tests
@@ -603,15 +1811,59 @@ main() {
         run_unittests || true
     fi
 
-    # Regression test
-    printf "\nUpdating regression tests repository...\n"
-	update_repo "${testsbase}" "${regtests_branch}" "${tests_repo_url}" && do_regtests='yes'
-
     if [[ ${do_regtests} == 'yes' ]]; then
         printf "\nRunning regression tests for OPALX\n"
-        run_regressiontests || return 1
+        run_regressiontests || ec=$?
     fi
 
+    update_overview
+    record_successful_run_state
+    clean_build_artifacts
+    return ${ec}
+}
+
+main() {
+    local -a branches=()
+    local default_branches_file="${HOME}/branches.txt"
+    if [[ "${do_cleanup_repo}" == 'yes' ]]; then
+        cleanup_published_repo
+        return 0
+    fi
+
+    if [[ "${do_not_compile_run}" == 'yes' && -z "${publish_dir}" ]]; then
+        die ${EC_ARG_ERROR} "ERROR: --doNotCompileRun requires --publish-dir"
+    fi
+
+    if [[ "${opt_branches_file_set}" == 'yes' ]]; then
+        read_branches_file "${opt_branches_file}"
+    elif [[ "${do_not_compile_run}" == 'yes' && -z "${opt_opalx_branch}" ]]; then
+        read_published_branches
+    elif [[ -z "${opt_opalx_branch}" && -f "${default_branches_file}" ]]; then
+        read_branches_file "${default_branches_file}"
+    else
+        branches=( "${branch}" )
+    fi
+
+    if (( ${#branches[@]} == 0 )); then
+        branches=( "${branch}" )
+    fi
+
+    local initial_do_compile="${do_compile}"
+    local initial_do_unittests="${do_unittests}"
+    local initial_do_regtests="${do_regtests}"
+    local initial_managed_build_layout="${managed_build_layout}"
+    local initial_architecture="${architecture}"
+
+    local selected_branch
+    for selected_branch in "${branches[@]}"; do
+        branch="${selected_branch}"
+        architecture="${initial_architecture}"
+        do_compile="${initial_do_compile}"
+        do_unittests="${initial_do_unittests}"
+        do_regtests="${initial_do_regtests}"
+        managed_build_layout="${initial_managed_build_layout}"
+        run_current_branch
+    done
 }
 
 main

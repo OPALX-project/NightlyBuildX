@@ -5,63 +5,20 @@
   <xsl:template match="/">
     <html>
       <head>
+        <title>OPALX Regression Test Results</title>
+        <link rel="stylesheet" href="nightlybuildx.css"/>
         <style type="text/css">
-          a { text-decoration:none; color:#666; }
-          a:hover { text-decoration:underline; color:#f00;}
           .no-hover {text-decoration:none; color:#000;}
           .no-hover:hover {text-decoration:none; color:#000;}
-          /* Style the buttons that are used to open and close the accordion panel */
-          .accordion {
-            background-color: #eee;
-            font-size: 12pt;
-            color: #444;
-            cursor: pointer;
-            padding: 12px;
-            width: 100%;
-            text-align: left;
-            border: none;
-            outline: none;
-            transition: 0.4s;
-          }
-
-          /* Add a background color to the button if it is clicked on (add the .active class with JS), and when you move the mouse over it (hover) */
-          .active, .accordion:hover {
-          background-color: #ccc;
-          }
-
-          /* Style the accordion panel. Note: hidden by default */
-          .panel {
-           padding: 0 12px;
-           background-color: white;
-           max-height: 0;
-           overflow: hidden;
-           transition: max-height 0.2s ease-out;
-          }
-          .accordion:after {
-          content: '\02795'; /* Unicode character for "plus" sign (+) */
-          font-size: 13px;
-          color: #777;
-          float: right;
-          margin-left: 5px;
-          }
-
-          .active:after {
-          content: "\2796"; /* Unicode character for "minus" sign (-) */
-          }
-
-          .fail {
-            background-color: #cdba2d;
-          }
-          .fail:hover {
-          background-color: #9d8d24;
-          }
         </style>
         <script type="text/javascript" src="accordion.js"></script>
       </head>
       <body onLoad="setup()">
+        <main>
+        <h1>OPALX Regression Test Results</h1>
         <h2><a name="test_revision" class="no-hover">Revisions</a></h2>
-        <table border="0">
-          <tr bgcolor="#9acd32">
+        <table>
+          <tr>
             <th>Date</th>
             <th>Code</th>
             <th>Tests</th>
@@ -84,10 +41,31 @@
             </td>
           </tr>
         </table>
+        <xsl:if test="Tests/RunMetadata">
+          <h2><a name="run_metadata" class="no-hover">Run Metadata</a></h2>
+          <table style="margin-bottom: 25px">
+            <tr>
+              <th>Host</th>
+              <th>Architecture</th>
+              <th>Backend</th>
+              <th>Ranks</th>
+              <th>Threads</th>
+              <th>Device</th>
+            </tr>
+            <tr>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/host"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/architecture"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/backend"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/mpi_ranks"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/omp_threads"/></td>
+              <td style="padding: 0px 10px 0px 10px"><xsl:value-of select="Tests/RunMetadata/device"/></td>
+            </tr>
+          </table>
+        </xsl:if>
         <h2>Regression Tests</h2>
         <xsl:if test="count(Tests/Simulation/Test[state]) &gt; 0">
-          <table border="0" style="margin-bottom: 25px">
-            <tr bgcolor="#9acd32">
+          <table style="margin-bottom: 25px">
+            <tr>
               <th style="padding: 2px 16px 2px 16px;">Passed</th>
               <th style="padding: 2px 16px 2px 16px;">Broken</th>
               <th style="padding: 2px 16px 2px 16px;">Failed</th>
@@ -139,8 +117,9 @@
             <p>
               <!--<h3>Simulation: <xsl:value-of select="@name"/></h3>-->
               Description: <xsl:value-of select="@description"/>
-              <table border="0">
-                <tr bgcolor="#9acd32">
+              <div class="result-table-scroll">
+              <table>
+                <tr>
                   <th>Variable</th>
                   <th>Mode</th>
                   <th>Required Accuracy</th>
@@ -169,20 +148,39 @@
                     </xsl:otherwise>
                   </xsl:choose>
                 </xsl:for-each>
-              </table><br/>
-              <xsl:for-each select="Test">
-                <xsl:variable name="plotname" select="plot"/>
-                <xsl:if test="$plotname">
-                  <xsl:variable name="varname" select="@var"/>
-                  <img style="margin-right:3px; margin-bottom:3px;" src="{plot}" alt="" title="" />
-                  <br/><br/>
-                </xsl:if>
-
-              </xsl:for-each>
+              </table>
+              </div><br/>
+              <xsl:if test="count(Test[plot]) + count(timing_plot) &gt; 0">
+                <div class="plot-browser">
+                  <div class="plot-toolbar">
+                    <label>
+                      Plot
+                      <input class="plot-selector-slider" type="range" min="0" max="{count(Test[plot]) + count(timing_plot) - 1}" value="0"/>
+                    </label>
+                    <span class="plot-counter"></span>
+                    <span class="plot-title"></span>
+                  </div>
+                  <div class="plot-stage">
+                    <xsl:for-each select="Test[plot]">
+                      <figure class="plot-frame" data-plot-index="{position() - 1}" data-plot-title="{@var}">
+                        <img class="plot-image" src="{plot}" alt="{@var}" title="{@var}" />
+                        <figcaption><xsl:value-of select="@var"/></figcaption>
+                      </figure>
+                    </xsl:for-each>
+                    <xsl:if test="timing_plot">
+                      <figure class="plot-frame" data-plot-index="{count(Test[plot])}" data-plot-title="timing overview">
+                        <img class="plot-image" src="{timing_plot}" alt="timing overview" title="timing overview" />
+                        <figcaption>timing overview</figcaption>
+                      </figure>
+                    </xsl:if>
+                  </div>
+                </div>
+              </xsl:if>
               <br/>
             </p>
           </div>
         </xsl:for-each>
+        </main>
       </body>
     </html>
   </xsl:template>
