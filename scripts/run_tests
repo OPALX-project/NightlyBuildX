@@ -141,6 +141,11 @@ OPTIONS:
 --no-reg-tests
 	Do not run regression tests, overriding the configuration file default.
 
+--no-salloc
+	Do not wrap the regression test runner in salloc/srun even if salloc
+	and sinfo are available. Use this when already running inside a SLURM
+	allocation (e.g. in a CI job).
+
 --run-local-now
 	Skip update/build/run and only generate comparison plots for the
 	local regression test in the current directory.
@@ -229,6 +234,7 @@ declare opt_regtests_branch=""
 declare opt_opalx_exe_path=""
 declare opt_opalx_build_dir=""
 declare opt_single_regtest=""
+declare opt_no_salloc='no'
 declare managed_build_layout='yes'
 
 # tests to run, all if non passed as argument
@@ -321,6 +327,9 @@ while (( $# > 0 )); do
         --no-reg-tests )
             explicit_actions='yes'
             do_regtests='no'
+            ;;
+        --no-salloc )
+            opt_no_salloc='yes'
             ;;
         --run-local-now )
             explicit_actions='yes'
@@ -813,7 +822,9 @@ run_regressiontests() {
     fi
 
     # Run regression tests
-    if command -v salloc >/dev/null 2>&1 && sinfo >/dev/null 2>&1; then
+    if [[ "${opt_no_salloc}" == 'yes' ]]; then
+        python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
+    elif command -v salloc >/dev/null 2>&1 && sinfo >/dev/null 2>&1; then
         salloc --gpus=1 --partition=gwendolen --cluster=gmerlin6  --account=gwendolen --nodes=1 --ntasks=1 --cpus-per-task=1 --time=02:00:00 srun --pty python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
     else
         python3 "${run_tests}" "${opts[@]}" "--" "${tests[@]}"
@@ -1715,7 +1726,15 @@ run_current_branch() {
         managed_build_layout='no'
         builddir=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "${opt_opalx_build_dir}")
         if [[ -z "${opt_opalx_exe_path}" ]]; then
-            opt_opalx_exe_path="${builddir}/src"
+            # Support both the legacy src/ layout and the standard-folders
+            # layout (bin/) used by OPALX_USE_STANDARD_FOLDERS / IPPL_USE_STANDARD_FOLDERS.
+            if [[ -x "${builddir}/src/opalx" ]]; then
+                opt_opalx_exe_path="${builddir}/src"
+            elif [[ -x "${builddir}/bin/opalx" ]]; then
+                opt_opalx_exe_path="${builddir}/bin"
+            else
+                opt_opalx_exe_path="${builddir}/src"
+            fi
         fi
     fi
 

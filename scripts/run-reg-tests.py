@@ -173,6 +173,8 @@ def main(argv):
         generate_web_page=args.generate_web_page,
     )
     rt.run(compare_only=args.run_local_now)
+    if not args.run_local_now and rt.totalNrPassed != rt.totalNrTests:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
