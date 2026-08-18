@@ -530,7 +530,15 @@ current_run_state_file() {
 write_current_run_inputs() {
     local -r output_file="$1"
     local opalx_commit regression_commit nightlybuild_commit run_host
-    opalx_commit=$(git -C "${srcdir}" rev-parse HEAD)
+    local opalx_src_dir="${srcdir}"
+    if [[ -n "${OPALX_SRC_DIR}" ]]; then
+        opalx_src_dir="${OPALX_SRC_DIR}"
+    fi
+    if [[ -d "${opalx_src_dir}/.git" ]]; then
+        opalx_commit=$(git -C "${opalx_src_dir}" rev-parse HEAD)
+    else
+        opalx_commit=""
+    fi
     regression_commit=$(git -C "${testsbase}" rev-parse HEAD)
     nightlybuild_commit=$(git -C "${prefix}" rev-parse HEAD)
     run_host=$(hostname -s 2>/dev/null || hostname)
